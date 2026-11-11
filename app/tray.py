@@ -9,27 +9,30 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 APP_TITLE = "Подсказки для Telegram"
 
 
-def make_icon(paused: bool = False) -> QIcon:
+def icon_pixmap(size: int, paused: bool = False) -> QPixmap:
     """Rounded square with the letter "А": blue when working, grey when paused."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#8a9099" if paused else "#2a9ef0"))
+    radius = size * 0.24
+    painter.drawRoundedRect(QRectF(0.5, 0.5, size - 1, size - 1), radius, radius)
+    font = QFont("Segoe UI")
+    font.setBold(True)
+    font.setPixelSize(int(size * 0.68))
+    painter.setFont(font)
+    painter.setPen(QColor("#ffffff"))
+    painter.drawText(QRectF(0, -size * 0.04, size, size), Qt.AlignmentFlag.AlignCenter, "А")
+    painter.end()
+    return pixmap
+
+
+def make_icon(paused: bool = False) -> QIcon:
     icon = QIcon()
     for size in (16, 20, 24, 32, 48, 64):
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#8a9099" if paused else "#2a9ef0"))
-        radius = size * 0.24
-        painter.drawRoundedRect(QRectF(0.5, 0.5, size - 1, size - 1), radius, radius)
-        font = QFont("Segoe UI")
-        font.setBold(True)
-        font.setPixelSize(int(size * 0.68))
-        painter.setFont(font)
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(QRectF(0, -size * 0.04, size, size),
-                         Qt.AlignmentFlag.AlignCenter, "А")
-        painter.end()
-        icon.addPixmap(pixmap)
+        icon.addPixmap(icon_pixmap(size, paused))
     return icon
 
 
