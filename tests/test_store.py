@@ -98,3 +98,33 @@ def test_settings_ignore_garbage(store):
     loaded = Settings.load(store)
     assert loaded.max_suggestions == Settings().max_suggestions
     assert loaded.cross_script is False
+
+
+def test_settings_new_fields_round_trip(store):
+    settings = Settings()
+    settings.theme = "dark"
+    settings.key_hints = "never"
+    settings.autostart = True
+    settings.import_marks = {"json:123": 456}
+    settings.save(store)
+    loaded = Settings.load(store)
+    assert loaded.theme == "dark"
+    assert loaded.key_hints == "never"
+    assert loaded.autostart is True
+    assert loaded.import_marks == {"json:123": 456}
+
+
+def test_settings_reject_unknown_choices(store):
+    store.set_setting("theme", "purple")
+    store.set_setting("key_hints", "sometimes")
+    store.set_setting("import_marks", [1, 2])
+    loaded = Settings.load(store)
+    assert loaded.theme == "telegram"
+    assert loaded.key_hints == "ctrl"
+    assert loaded.import_marks == {}
+
+
+def test_default_import_marks_are_not_shared():
+    a, b = Settings(), Settings()
+    a.import_marks["x"] = 1
+    assert b.import_marks == {}

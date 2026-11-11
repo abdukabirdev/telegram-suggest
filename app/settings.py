@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .store import Store
+
+
+_CHOICES = {
+    "theme": ("telegram", "system", "dark", "light"),
+    "key_hints": ("ctrl", "always", "never"),
+    "log_level": ("DEBUG", "INFO", "WARNING", "ERROR"),
+}
 
 
 @dataclass
@@ -31,7 +38,17 @@ class Settings:
     # Suggestion window: shift from the automatic position, in screen pixels
     overlay_offset_x: int = 0
     overlay_offset_y: int = 0
-    theme: str = "system"           # "system" | "dark" | "light"
+    # "telegram": colours read from Telegram's window | "system": Windows
+    # light/dark mode | "dark" | "light"
+    theme: str = "telegram"
+    # Small key numbers on the words: "ctrl" while Ctrl is held | "always" | "never"
+    key_hints: str = "ctrl"
+
+    # Program
+    autostart: bool = False
+    welcome_shown: bool = False
+    # Telegram export import: chat key -> id of the last imported message
+    import_marks: dict = field(default_factory=dict)
 
     # Technical
     log_level: str = "INFO"
@@ -53,6 +70,8 @@ class Settings:
                     value = type(default)(value)
             else:
                 ok = isinstance(value, type(default))
+            if ok and f.name in _CHOICES:
+                ok = value in _CHOICES[f.name]
             if ok:
                 setattr(settings, f.name, value)
         return settings
