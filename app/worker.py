@@ -135,8 +135,14 @@ class EngineWorker(threading.Thread):
             if flag and not self._blocked:
                 self.engine.discard()
             self._blocked = flag
+        elif kind == "forget":
+            if not self._paused and not self._blocked:
+                self.engine.forget(event[1])
+        elif kind == "refresh":
+            self.engine.invalidate()
         elif kind == "settings":
             self.lexicon.refresh_settings()
+            self.engine.invalidate()
         elif kind == "call":
             event[1]()
 

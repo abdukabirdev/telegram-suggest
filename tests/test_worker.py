@@ -130,6 +130,32 @@ def test_failed_insert_is_not_learned(rig, lexicon):
     assert lexicon.get("салом").freq == 1
 
 
+def test_forget_deletes_the_shown_word(rig, lexicon):
+    rig.type("салом салом сало\nса")
+    assert rig.shown == ["салом", "сало"]
+    rig.worker.process(("forget", 1))
+    assert "сало" not in lexicon
+    assert rig.shown == ["салом"]
+    assert rig.engine.prefix == "са"            # the word being typed stays
+    rig.worker.process(("forget", 5))           # no such item: nothing happens
+    assert "салом" in lexicon
+
+
+def test_forget_is_ignored_while_paused(rig, lexicon):
+    rig.type("салом\nса")
+    rig.worker.process(("pause", True))
+    rig.worker.process(("forget", 0))
+    assert "салом" in lexicon
+
+
+def test_refresh_recomputes_after_outside_deletion(rig, lexicon):
+    rig.type("салом сало\nса")
+    assert rig.shown == ["сало", "салом"] or rig.shown == ["салом", "сало"]
+    lexicon.delete("сало")
+    rig.worker.process(("refresh",))
+    assert rig.shown == ["салом"]
+
+
 def test_escape_action_dismisses(rig):
     rig.type("салом\nса")
     rig.key(w.VK_ESCAPE, action=("dismiss",))
