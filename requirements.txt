@@ -1,0 +1,4 @@
+# Runtime
+PySide6-Essentials>=6.10
+
+# WinAPI is accessed through ctypes (stdlib), SQLite through sqlite3 (stdlib).
