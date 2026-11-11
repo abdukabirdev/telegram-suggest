@@ -28,6 +28,14 @@ class Settings:
     cross_script: bool = False
     cross_script_penalty: float = 0.5
 
+    # Suggestion window: shift from the automatic position, in screen pixels
+    overlay_offset_x: int = 0
+    overlay_offset_y: int = 0
+    theme: str = "system"           # "system" | "dark" | "light"
+
+    # Technical
+    log_level: str = "INFO"
+
     @classmethod
     def load(cls, store: "Store") -> "Settings":
         settings = cls()
