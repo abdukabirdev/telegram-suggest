@@ -2,6 +2,12 @@
 
 It never takes keyboard focus (WS_EX_NOACTIVATE), so Telegram keeps the caret
 while the user clicks a word with the mouse.
+
+Look: a rounded panel with a soft shadow, words as chips. The first word,
+the one Tab inserts, sits on an accent-tinted chip. Key numbers are not shown
+all the time (they clutter the strip): they appear while Ctrl is held, the
+way Windows shows Alt shortcuts. A right click on a word asks whether to
+delete it from the dictionary; a second (left) click on it confirms.
 """
 
 from __future__ import annotations
@@ -10,47 +16,50 @@ import ctypes
 from ctypes import wintypes
 from typing import Optional, Sequence
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 from . import winapi as w
+from .theme import Palette, palette_for
 
-_THEMES = {
-    "dark": {
-        "bg": "#24272c", "border": "#3b4048", "text": "#e9ebee", "muted": "#8d949e",
-        "hover": "#343941", "accent": "#6ab3f3", "divider": "#353a42",
-    },
-    "light": {
-        "bg": "#ffffff", "border": "#cfd4da", "text": "#1c1e21", "muted": "#8a9099",
-        "hover": "#edf1f5", "accent": "#168acd", "divider": "#e3e6ea",
-    },
-}
-
-_PANEL_PAD = 4          # around the row of items
-_ITEM_PAD = 10          # inside an item, left and right
-_HINT_GAP = 6           # between the key hint and the word
-_ITEM_HEIGHT = 28
-_RADIUS = 9
+SHADOW = 8              # transparent margin around the panel for the shadow
+_PANEL_PAD = 4          # between the panel edge and the chips
+_ITEM_PAD = 16          # inside a chip, left and right
+_ITEM_GAP = 2           # between chips
+_ITEM_HEIGHT = 32
+_MIN_ITEM_WIDTH = 44
+_RADIUS = 11
+_CHIP_RADIUS = 8
 _MAX_WORD_WIDTH = 240
+_CONFIRM_TIMEOUT_MS = 5000
+
+HINT_MODES = ("ctrl", "always", "never")
 
 
 def hint_for(index: int) -> str:
-    return "Tab" if index == 0 else f"Ctrl+{index + 1}"
+    """Key number shown on a chip: Ctrl+1 ... Ctrl+9."""
+    return str(index + 1)
 
 
-def system_theme() -> str:
-    try:
-        scheme = QGuiApplication.styleHints().colorScheme()
-        return "dark" if scheme == Qt.ColorScheme.Dark else "light"
-    except AttributeError:          # Qt older than 6.5
-        return "light"
+def confirm_text(word: str) -> str:
+    return f"Удалить «{word}»?"
+
+
+def _font(size: int, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
+    font = QFont()
+    font.setFamilies(["Segoe UI Variable Text", "Segoe UI"])
+    font.setPixelSize(size)
+    font.setWeight(weight)
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    return font
 
 
 class Overlay(QWidget):
     clicked = Signal(int)
+    delete_requested = Signal(int)
 
-    def __init__(self, theme: str = "system") -> None:
+    def __init__(self, theme: str = "system", key_hints: str = "ctrl") -> None:
         super().__init__(
             None,
             Qt.WindowType.Tool
@@ -65,24 +74,24 @@ class Overlay(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self._font = QFont("Segoe UI")
-        self._font.setPixelSize(14)
-        self._hint_font = QFont("Segoe UI")
-        self._hint_font.setPixelSize(10)
+        self._font = _font(14)
+        self._primary_font = _font(14, QFont.Weight.DemiBold)
+        self._hint_font = _font(9, QFont.Weight.DemiBold)
 
-        self._theme_setting = theme
-        self._colors = _THEMES[self._resolve_theme()]
+        self._palette: Palette = palette_for(theme)
+        self._hint_mode = key_hints if key_hints in HINT_MODES else "ctrl"
+        self._ctrl_held = False
         self._items: list[str] = []
         self._shown: list[str] = []         # possibly elided
         self._rects: list[QRect] = []
         self._hover = -1
         self._pressed = -1
+        self._confirm = -1                  # chip asking "delete this word?"
         self._native_ready = False
 
-        try:
-            QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_scheme_changed)
-        except AttributeError:
-            pass
+        self._confirm_timer = QTimer(self)
+        self._confirm_timer.setSingleShot(True)
+        self._confirm_timer.timeout.connect(self.cancel_confirm)
 
     # ---- content -----------------------------------------------------------
 
@@ -93,41 +102,73 @@ class Overlay(QWidget):
         self._items = list(items)
         self._hover = -1
         self._pressed = -1
+        self._confirm = -1
+        self._confirm_timer.stop()
         self._layout()
         self.update()
 
-    def set_theme(self, theme: str) -> None:
-        self._theme_setting = theme
-        self._colors = _THEMES[self._resolve_theme()]
+    def palette_colors(self) -> Palette:
+        return self._palette
+
+    def set_palette(self, palette: Palette) -> None:
+        if palette != self._palette:
+            self._palette = palette
+            self.update()
+
+    def set_key_hints(self, mode: str) -> None:
+        self._hint_mode = mode if mode in HINT_MODES else "ctrl"
         self.update()
 
-    def _resolve_theme(self) -> str:
-        return self._theme_setting if self._theme_setting in _THEMES else system_theme()
+    def set_ctrl_held(self, held: bool) -> None:
+        if held != self._ctrl_held:
+            self._ctrl_held = held
+            if self._hint_mode == "ctrl":
+                self.update()
 
-    def _on_scheme_changed(self, *_args) -> None:
-        self.set_theme(self._theme_setting)
+    def hints_visible(self) -> bool:
+        return self._hint_mode == "always" or (self._hint_mode == "ctrl" and self._ctrl_held)
+
+    def confirming(self) -> int:
+        return self._confirm
+
+    def cancel_confirm(self) -> None:
+        if self._confirm != -1:
+            self._confirm = -1
+            self._layout()
+            self.update()
+
+    def _label(self, index: int) -> str:
+        shown = self._shown[index]
+        return confirm_text(shown) if index == self._confirm else shown
 
     def _layout(self) -> None:
         metrics = QFontMetrics(self._font)
-        hint_metrics = QFontMetrics(self._hint_font)
+        primary = QFontMetrics(self._primary_font)
         self._rects = []
         self._shown = []
-        x = _PANEL_PAD
+        x = SHADOW + _PANEL_PAD
+        top = SHADOW + _PANEL_PAD
         for i, text in enumerate(self._items):
-            shown = metrics.elidedText(text, Qt.TextElideMode.ElideRight, _MAX_WORD_WIDTH)
-            width = (_ITEM_PAD + hint_metrics.horizontalAdvance(hint_for(i)) + _HINT_GAP
-                     + metrics.horizontalAdvance(shown) + _ITEM_PAD)
-            self._rects.append(QRect(x, _PANEL_PAD, width, _ITEM_HEIGHT))
-            self._shown.append(shown)
-            x += width
-        self.setFixedSize(max(x + _PANEL_PAD, 2 * _PANEL_PAD + 1),
-                          _ITEM_HEIGHT + 2 * _PANEL_PAD)
+            fm = primary if i == 0 else metrics
+            self._shown.append(fm.elidedText(text, Qt.TextElideMode.ElideRight, _MAX_WORD_WIDTH))
+            label = self._label(i)
+            width = max(_ITEM_PAD + fm.horizontalAdvance(label) + _ITEM_PAD, _MIN_ITEM_WIDTH)
+            self._rects.append(QRect(x, top, width, _ITEM_HEIGHT))
+            x += width + _ITEM_GAP
+        if self._rects:
+            x -= _ITEM_GAP
+        width = max(x + _PANEL_PAD + SHADOW, 2 * (SHADOW + _PANEL_PAD) + 1)
+        self.setFixedSize(width, _ITEM_HEIGHT + 2 * (_PANEL_PAD + SHADOW))
 
     def index_at(self, pos: QPoint) -> int:
         for i, rect in enumerate(self._rects):
             if rect.contains(pos):
                 return i
         return -1
+
+    def panel_rect(self) -> QRect:
+        """The visible panel, without the shadow margin (widget coordinates)."""
+        return self.rect().adjusted(SHADOW, SHADOW, -SHADOW, -SHADOW)
 
     # ---- native window -----------------------------------------------------
 
@@ -151,6 +192,17 @@ class Overlay(QWidget):
             return None
         return (rect.left, rect.top, rect.right, rect.bottom)
 
+    def native_panel_rect(self) -> Optional[tuple[int, int, int, int]]:
+        """The visible panel in physical screen pixels, None while hidden."""
+        rect = self.native_rect()
+        if rect is None:
+            return None
+        m = self.margin_physical()
+        return (rect[0] + m, rect[1] + m, rect[2] - m, rect[3] - m)
+
+    def margin_physical(self) -> int:
+        return round(SHADOW * self.devicePixelRatioF())
+
     def physical_size(self) -> tuple[int, int]:
         ratio = self.devicePixelRatioF()
         return round(self.width() * ratio), round(self.height() * ratio)
@@ -168,39 +220,75 @@ class Overlay(QWidget):
 
     # ---- painting ----------------------------------------------------------
 
+    def _paint_shadow(self, painter: QPainter, panel: QRectF) -> None:
+        strength = self._palette.shadow
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for k in range(1, SHADOW + 1):
+            alpha = round(strength * ((SHADOW + 1 - k) / (SHADOW + 1)) ** 2.4 / 2.2)
+            if alpha <= 0:
+                continue
+            painter.setPen(QPen(QColor(0, 0, 0, alpha), 1))
+            ring = panel.adjusted(-k + 0.5, -k + 0.5 + 1.5, k - 0.5, k - 0.5 + 1.5)
+            painter.drawRoundedRect(ring, _RADIUS + k, _RADIUS + k)
+
     def paintEvent(self, _event) -> None:
-        colors = self._colors
+        p = self._palette
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        panel = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        painter.setPen(QPen(QColor(colors["border"]), 1))
-        painter.setBrush(QColor(colors["bg"]))
+        panel = QRectF(self.panel_rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        self._paint_shadow(painter, panel)
+        painter.setPen(QPen(QColor(p.border), 1))
+        painter.setBrush(QColor(p.bg))
         painter.drawRoundedRect(panel, _RADIUS, _RADIUS)
 
-        metrics = QFontMetrics(self._font)
-        hint_metrics = QFontMetrics(self._hint_font)
+        hints = self.hints_visible()
+        highlighted = set()
         for i, rect in enumerate(self._rects):
-            if i == self._hover:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(colors["hover"]))
-                painter.drawRoundedRect(QRectF(rect), _RADIUS - 3, _RADIUS - 3)
-            elif i > 0 and i - 1 != self._hover:
-                painter.setPen(QPen(QColor(colors["divider"]), 1))
-                painter.drawLine(rect.left(), rect.top() + 7, rect.left(), rect.bottom() - 7)
+            chip = QRectF(rect)
+            fill: Optional[QColor] = None
+            if i == self._confirm:
+                fill = QColor(p.danger_bg)
+            elif i == 0:
+                fill = QColor(p.accent_bg)
+            if i == self._hover or i == self._pressed:
+                over = QColor(p.accent if i == 0 and i != self._confirm else p.text)
+                over.setAlpha(40 if i == self._pressed else 22)
+                if fill is None:
+                    fill = QColor(p.pressed if i == self._pressed else p.hover)
+                else:
+                    path = QPainterPath()
+                    path.addRoundedRect(chip, _CHIP_RADIUS, _CHIP_RADIUS)
+                    painter.fillPath(path, fill)
+                    fill = over
+            if fill is not None:
+                highlighted.add(i)
+                path = QPainterPath()
+                path.addRoundedRect(chip, _CHIP_RADIUS, _CHIP_RADIUS)
+                painter.fillPath(path, fill)
 
-            hint = hint_for(i)
-            x = rect.left() + _ITEM_PAD
-            baseline = rect.top() + (rect.height() + metrics.ascent() - metrics.descent()) // 2
-            painter.setFont(self._hint_font)
-            painter.setPen(QColor(colors["muted"]))
-            painter.drawText(x, baseline - 1, hint)
-            x += hint_metrics.horizontalAdvance(hint) + _HINT_GAP
+        for i, rect in enumerate(self._rects):
+            if i > 0 and i not in highlighted and i - 1 not in highlighted:
+                x = rect.left() - _ITEM_GAP / 2
+                painter.setPen(QPen(QColor(p.divider), 1))
+                painter.drawLine(QPointF(x, rect.top() + 9), QPointF(x, rect.bottom() - 8))
 
-            painter.setFont(self._font)
-            painter.setPen(QColor(colors["accent"] if i == 0 else colors["text"]))
-            painter.drawText(x, baseline, self._shown[i])
+            if i == self._confirm:
+                color, font = p.danger, self._primary_font
+            elif i == 0:
+                color, font = p.accent, self._primary_font
+            else:
+                color, font = p.text, self._font
+            painter.setFont(font)
+            painter.setPen(QColor(color))
+            painter.drawText(QRectF(rect), Qt.AlignmentFlag.AlignCenter, self._label(i))
+
+            if hints and i < 9 and i != self._confirm:
+                painter.setFont(self._hint_font)
+                painter.setPen(QColor(p.accent if i == 0 else p.muted))
+                painter.drawText(QRectF(rect.left() + 3, rect.top() + 3, 10, 11),
+                                 Qt.AlignmentFlag.AlignCenter, hint_for(i))
         painter.end()
 
     # ---- mouse -------------------------------------------------------------
@@ -217,13 +305,29 @@ class Overlay(QWidget):
             self.update()
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             self._pressed = self.index_at(event.position().toPoint())
+            self.update()
 
     def mouseReleaseEvent(self, event) -> None:
-        if event.button() != Qt.MouseButton.LeftButton:
+        button = event.button()
+        if button not in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             return
         index = self.index_at(event.position().toPoint())
         pressed, self._pressed = self._pressed, -1
-        if index >= 0 and index == pressed:
-            self.clicked.emit(index)
+        self.update()
+        if index < 0 or index != pressed:
+            return
+        if button == Qt.MouseButton.RightButton:
+            self._confirm = index
+            self._layout()
+            self.update()
+            self._confirm_timer.start(_CONFIRM_TIMEOUT_MS)
+            return
+        if index == self._confirm:
+            self._confirm = -1
+            self._confirm_timer.stop()
+            self.delete_requested.emit(index)
+            return
+        self.cancel_confirm()
+        self.clicked.emit(index)
