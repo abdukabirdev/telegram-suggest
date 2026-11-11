@@ -173,7 +173,9 @@ class UiaStrategy:
                 anchor = self._anchor(focused, "uia-focus")
                 if anchor is not None:
                     return anchor
-        except OSError:
+        except Exception:
+            # COMError is not an OSError: Telegram busy or the element went
+            # away between the calls. The window search below still works.
             pass
         # 2. Search the window: a focused field, else the lowest one (message box)
         root = self._uia.ElementFromHandle(hwnd)
