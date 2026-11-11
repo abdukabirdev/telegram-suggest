@@ -1,4 +1,6 @@
 # Runtime
 PySide6-Essentials>=6.10
+# UI Automation: finding Telegram's text field (position of the suggestion window)
+comtypes>=1.4
 
 # WinAPI is accessed through ctypes (stdlib), SQLite through sqlite3 (stdlib).
