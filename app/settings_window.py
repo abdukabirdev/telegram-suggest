@@ -680,6 +680,13 @@ class SettingsWindow(QWidget):
     def importing(self) -> bool:
         return self._state == "learning" and self._job.busy()
 
+    def stop_import(self, timeout: float = 5.0) -> None:
+        """On exit: stop a running import; what was learned so far is kept."""
+        self._job.cancel()
+        thread = self._job._thread
+        if thread is not None:
+            thread.join(timeout)
+
     # ---- page: general -----------------------------------------------------
 
     def _build_general_page(self) -> QWidget:
