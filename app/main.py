@@ -25,8 +25,10 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from . import autostart, inserter, ru, ui_style
 from . import winapi as w
+from . import __version__
 from .engine import Engine
 from .hook import KeyboardHook
+from .instance import SingleInstance, is_newer
 from .keymap import KeyTranslator
 from .lexicon import Lexicon
 from .logsetup import setup_logging
@@ -64,6 +66,8 @@ class Bridge(QObject):
     anchor = Signal(object, object)
     pause_hotkey = Signal()
     diag = Signal(object)
+    show_requested = Signal()       # the .exe was started again
+    quit_requested = Signal()       # a newer version is taking over
 
 
 class Application(QObject):
@@ -125,6 +129,8 @@ class Application(QObject):
         self.bridge.anchor.connect(self._on_anchor)
         self.bridge.pause_hotkey.connect(lambda: self.toggle_pause(notify=True))
         self.bridge.diag.connect(self._on_diag)
+        self.bridge.show_requested.connect(lambda: self.open_settings(None))
+        self.bridge.quit_requested.connect(QApplication.quit)
         self.overlay.clicked.connect(self._on_overlay_clicked)
         self.overlay.delete_requested.connect(self._on_overlay_delete)
         try:
@@ -144,6 +150,7 @@ class Application(QObject):
     # ---- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
+        self.apply_palette()
         self.worker.start()
         self.locator.start()
         self.hook.start()
@@ -223,7 +230,8 @@ class Application(QObject):
         welcome.raise_()
         welcome.activateWindow()
 
-    def open_settings(self, page: str = "suggest") -> None:
+    def open_settings(self, page: Optional[str] = "suggest") -> None:
+        """Show the settings window; ``page`` None keeps the page it was on."""
         if self.settings_window is None:
             window = SettingsWindow(self.settings, self.store, self.lexicon, self._palette)
             window.settings_changed.connect(self._on_setting_changed)
@@ -312,33 +320,64 @@ class Application(QObject):
 
     def apply_palette(self, *_args) -> None:
         self.overlay.set_palette(self._palette())
+        app = QApplication.instance()
+        if app is not None:
+            # the program's own windows dress the same way as the suggestions
+            ui_style.apply(app, ui_style.colors_for(self.settings.theme, self._telegram_bg))
         window = self.settings_window
         if window is not None and window.isVisible():
             window.refresh_preview()
 
-    def _sample_telegram(self, anchor: Optional[Anchor]) -> None:
+    def _sample_telegram(self) -> None:
         """Read the background of Telegram's message field, now and then.
 
         Only one colour is computed from the pixels; they are not kept.
+        Runs from the poll timer, so it works even when UI Automation fails
+        and only the guess by window geometry is known.
         """
-        if (self.settings.theme != "telegram" or anchor is None
-                or anchor.source == "window" or anchor.is_password):
+        if self.settings.theme != "telegram":
             return
         now = time.monotonic()
         if now - self._last_sample < _SAMPLE_EVERY_S:
             return
-        if w.GetForegroundWindow() != self._target_hwnd:
+        hwnd = self._target_hwnd
+        if not hwnd or w.GetForegroundWindow() != hwnd:
             return
-        field = (anchor.left, anchor.top, anchor.right, anchor.bottom)
-        ours = self.overlay.native_rect()
-        if ours is not None and not (ours[2] <= field[0] or field[2] <= ours[0]
-                                     or ours[3] <= field[1] or field[3] <= ours[1]):
-            return                      # our own window covers the field
         self._last_sample = now
+        field = self._sample_rect(hwnd)
+        if field is None:
+            return
         color = sample_background(field)
         if color is not None and color != self._telegram_bg:
             self._telegram_bg = color
             self.apply_palette()
+
+    def _sample_rect(self, hwnd: int) -> Optional[tuple[int, int, int, int]]:
+        """Part of the message field that shows its background, None if unknown."""
+        anchor = self._anchor if self._anchor_hwnd == hwnd else None
+        if anchor is not None and anchor.is_password:
+            return None
+        if anchor is None or anchor.source == "window":
+            anchor = self._fallback.locate(hwnd)
+            if anchor is None:
+                return None
+            # The guess knows the input row but not where the chat list
+            # ends: its right part is inside the field whatever the layout.
+            width = round(260 * (anchor.bottom - anchor.top) / 28)
+            field = (max(anchor.left, anchor.right - width), anchor.top,
+                     anchor.right, anchor.bottom)
+        else:
+            field = (anchor.left, anchor.top, anchor.right, anchor.bottom)
+        ours = self.overlay.native_rect()
+        if ours is not None and not (ours[2] <= field[0] or field[2] <= ours[0]
+                                     or ours[3] <= field[1] or field[3] <= ours[1]):
+            # Our window (its shadow) hangs over the top of the field: use
+            # what is below it, or skip this time.
+            if ours[1] <= field[1] and ours[3] + 4 < field[3]:
+                field = (field[0], ours[3], field[2], field[3])
+            else:
+                return None
+        return field
 
     def _on_suggestions(self, texts: list) -> None:
         if texts and not self._active:
@@ -356,8 +395,6 @@ class Application(QObject):
         if blocked != self._blocked:
             self._blocked = blocked
             self.worker.post("blocked", blocked)
-        if self._active and hwnd == self._target_hwnd:
-            self._sample_telegram(anchor)
         if self.overlay.isVisible():
             self._reposition()
         if self.diag:
@@ -406,6 +443,8 @@ class Application(QObject):
             if active:
                 self._target_hwnd = hwnd
                 self.locator.request(hwnd)
+                # read the colours soon, once the window has finished drawing
+                self._last_sample = time.monotonic() - _SAMPLE_EVERY_S + 0.5
             else:
                 self.overlay.hide()
             self.worker.post("focus", active, hwnd)
@@ -430,6 +469,7 @@ class Application(QObject):
                 QTimer.singleShot(150, lambda: self.locator.request(self._target_hwnd))
         self._mouse_was_down = pressed
         self._update_key_numbers()
+        self._sample_telegram()
 
         # Windows drops a low-level hook that was once too slow, without telling.
         now = time.monotonic()
@@ -507,11 +547,39 @@ def _mutex_name(db: Optional[str]) -> str:
     return f"{_MUTEX_NAME}.{digest}"
 
 
+def _second_launch(instance: SingleInstance, autostart: bool) -> bool:
+    """Another copy runs. True when this one should go on starting."""
+    other = instance.running()
+    if other is not None and is_newer(__version__, other.version):
+        # a newly downloaded .exe: close the old version and take its place
+        if instance.replace_running():
+            return True
+        if autostart:
+            return False
+        QMessageBox.warning(
+            None, APP_TITLE,
+            "Не удалось закрыть старую версию программы.\n\n"
+            "Закройте её через значок «А» возле часов → «Выход» "
+            "и запустите новую ещё раз.")
+        return False
+    if other is None:
+        # a copy older than 0.10 does not listen for requests
+        if not autostart:
+            QMessageBox.information(
+                None, APP_TITLE,
+                "Работает старая версия программы.\n\n"
+                "Закройте её через значок «А» возле часов → «Выход» "
+                "и запустите эту ещё раз.")
+        return False
+    if not autostart:
+        instance.ask_show()             # the running copy opens its window
+    return False
+
+
 def main(argv=None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
 
-    mutex = w.CreateMutexW(None, False, _mutex_name(args.db))
-    already_running = ctypes.get_last_error() == w.ERROR_ALREADY_EXISTS
+    instance = SingleInstance(_mutex_name(args.db))
 
     qt_app = QApplication(sys.argv[:1])
     qt_app.setApplicationName("TelegramSuggest")
@@ -519,16 +587,10 @@ def main(argv=None) -> int:
     qt_app.setQuitOnLastWindowClosed(False)
     ui_style.apply(qt_app)
 
-    if already_running:
-        if args.autostart:
-            return 0
-        QMessageBox.information(
-            None, APP_TITLE,
-            "Программа уже запущена.\n\n"
-            "Её значок (синяя буква «А») находится возле часов, "
-            "в правом нижнем углу экрана.",
-        )
+    if not instance.first and not _second_launch(instance, args.autostart):
+        instance.close()
         return 0
+    instance.publish(__version__)
 
     store = None
     app = None
@@ -547,6 +609,8 @@ def main(argv=None) -> int:
         app = Application(store, settings, lexicon, diag=args.diag, quiet=args.autostart,
                           test_copy=args.db is not None)
         app.start()
+        instance.listen(on_show=app.bridge.show_requested.emit,
+                        on_quit=app.bridge.quit_requested.emit)
     except Exception:
         log.exception("startup failed")
         QMessageBox.critical(
@@ -558,6 +622,7 @@ def main(argv=None) -> int:
             app.shutdown()
         if store is not None:
             store.close()
+        instance.close()
         return 1
 
     signal.signal(signal.SIGINT, lambda *_: qt_app.quit())
@@ -567,7 +632,7 @@ def main(argv=None) -> int:
     app.shutdown()
     store.close()
     log.info("stopped")
-    del mutex
+    instance.close()
     return code
 
 
