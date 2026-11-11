@@ -19,11 +19,11 @@ import time
 from ctypes import wintypes
 from typing import Optional
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from . import inserter
+from . import autostart, inserter, ru, ui_style
 from . import winapi as w
 from .engine import Engine
 from .hook import KeyboardHook
@@ -34,9 +34,11 @@ from .overlay import Overlay
 from .paths import database_path
 from .positioning import Anchor, Locator, WindowStrategy, monitor_work_area, place
 from .settings import Settings
+from .settings_window import SettingsWindow
 from .store import Store
 from .theme import palette_for, sample_background
 from .tray import APP_TITLE, Tray
+from .welcome import WelcomeWindow
 from .window_watch import WindowWatch
 from .worker import EngineWorker
 
@@ -50,6 +52,11 @@ _SAMPLE_EVERY_S = 2.0       # how often Telegram's colours are re-read
 _HINT_DELAY_S = 0.3         # Ctrl held this long shows the key numbers
 _MUTEX_NAME = "Local\\TelegramSuggest.SingleInstance"
 
+# Settings whose change needs the dictionary index rebuilt / only new suggestions
+_RANKING = frozenset({"min_suggest_len", "half_life_days", "bigram_weight", "min_word_len"})
+_SUGGESTING = frozenset({"max_suggestions", "min_prefix_len", "predict_next_word",
+                         "cross_script", "cross_script_penalty"})
+
 
 class Bridge(QObject):
     """Carries events from the background threads into the Qt thread."""
@@ -61,12 +68,15 @@ class Bridge(QObject):
 
 class Application(QObject):
     def __init__(self, store: Store, settings: Settings, lexicon: Lexicon,
-                 diag: bool = False) -> None:
+                 diag: bool = False, quiet: bool = False) -> None:
         super().__init__()
         self.store = store
         self.settings = settings
         self.lexicon = lexicon
         self.diag = diag
+        self.quiet = quiet                  # started with Windows: no greeting balloon
+        self.settings_window: Optional[SettingsWindow] = None
+        self.welcome: Optional[WelcomeWindow] = None
 
         self.bridge = Bridge()
         self.overlay = Overlay(settings.theme, settings.key_hints)
@@ -120,6 +130,10 @@ class Application(QObject):
             pass
         self.tray.pause_toggled.connect(self.toggle_pause)
         self.tray.quit_requested.connect(QApplication.quit)
+        self.tray.page_requested.connect(self.open_settings)
+        self.tray.help_requested.connect(lambda: self.show_welcome(first_run=False))
+        self.tray.autostart_toggled.connect(self.set_autostart)
+        self.tray.menu().aboutToShow.connect(self._refresh_tray)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll)
@@ -133,10 +147,17 @@ class Application(QObject):
         self.hook.installed.wait(3.0)
         self.tray.show()
         self._timer.start(_POLL_IDLE_MS)
-        self.tray.notify(
-            "Программа работает. Печатайте в Telegram: подсказки появятся над полем "
-            "сообщения. Tab вставляет первое слово, можно выбрать и мышью."
-        )
+        # The .exe may have been moved since autostart was turned on
+        autostart.sync(self.settings.autostart)
+        self.tray.set_autostart(self.settings.autostart)
+        self._refresh_tray()
+        if not self.settings.welcome_shown:
+            self._first_run()
+        elif not self.quiet:
+            self.tray.notify(
+                "Программа работает. Печатайте в Telegram: подсказки появятся над полем "
+                "сообщения. Tab вставляет первое слово, можно выбрать и мышью."
+            )
         if self.diag:
             self._print("Диагностика включена. Откройте Telegram и печатайте в поле сообщения.")
             self._print("Здесь видно то, что видит программа. Выход: Ctrl+C или значок возле часов.")
@@ -147,6 +168,11 @@ class Application(QObject):
         self._timer.stop()
         self.overlay.hide()
         self.tray.hide()
+        if self.settings_window is not None:
+            self.settings_window.stop_import()
+            self.settings_window.close()
+        if self.welcome is not None:
+            self.welcome.close()
         self.hook.stop()
         self.hook.join(2.0)
         self.worker.stop()
@@ -165,6 +191,88 @@ class Application(QObject):
 
     def _set_visible(self, count: int) -> None:
         self.hook.visible_count = count     # runs in the worker thread
+
+    # ---- windows -----------------------------------------------------------
+
+    def _first_run(self) -> None:
+        # The packed program is meant to just work: start with Windows by
+        # default. The welcome window shows the checkbox to turn it off.
+        if getattr(sys, "frozen", False) and not self.settings.autostart:
+            self.set_autostart(True)
+        self.settings.welcome_shown = True
+        self.store.set_setting("welcome_shown", True)
+        self.show_welcome(first_run=True)
+
+    def show_welcome(self, first_run: bool = False) -> None:
+        if self.welcome is not None:
+            self.welcome.close()
+            self.welcome.deleteLater()
+        welcome = WelcomeWindow(self._palette(), self.settings.autostart, first_run)
+        welcome.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        welcome.autostart_changed.connect(self.set_autostart)
+        welcome.import_requested.connect(lambda: self.open_settings("import"))
+        welcome.destroyed.connect(lambda *_: setattr(self, "welcome", None))
+        self.welcome = welcome
+        welcome.show()
+        welcome.raise_()
+        welcome.activateWindow()
+
+    def open_settings(self, page: str = "suggest") -> None:
+        if self.settings_window is None:
+            window = SettingsWindow(self.settings, self.store, self.lexicon, self._palette)
+            window.settings_changed.connect(self._on_setting_changed)
+            window.words_changed.connect(self._on_words_changed)
+            window.welcome_requested.connect(lambda: self.show_welcome(first_run=False))
+            self.settings_window = window
+        self.settings_window.show_page(page)
+
+    def _on_setting_changed(self, name: str) -> None:
+        if name == "theme":
+            self._last_sample = 0.0             # read Telegram again at once
+            self.apply_palette()
+        elif name == "key_hints":
+            self.overlay.set_key_hints(self.settings.key_hints)
+        elif name in _RANKING:
+            self.worker.post("settings")
+        elif name in _SUGGESTING:
+            self.worker.post("refresh")
+        elif name in ("overlay_offset_x", "overlay_offset_y"):
+            if self.overlay.isVisible():
+                self._reposition()
+        elif name == "autostart":
+            self._apply_autostart(self.settings.autostart)
+
+    def _on_words_changed(self) -> None:
+        self.worker.post("refresh")
+        self._refresh_tray()
+
+    def set_autostart(self, enabled: bool) -> None:
+        """From the tray menu or the welcome window."""
+        if self.settings.autostart != enabled:
+            self.settings.autostart = enabled
+            self.store.set_setting("autostart", enabled)
+        self._apply_autostart(enabled)
+
+    def _apply_autostart(self, enabled: bool) -> None:
+        if not autostart.sync(enabled):
+            QMessageBox.warning(
+                None, APP_TITLE,
+                "Не удалось изменить автозапуск. Возможно, его запрещают настройки "
+                "компьютера или антивирус.")
+            enabled = autostart.is_enabled()
+            self.settings.autostart = enabled
+            self.store.set_setting("autostart", enabled)
+        self.tray.set_autostart(enabled)
+        if self.settings_window is not None:
+            self.settings_window.set_autostart_checked(enabled)
+        if self.welcome is not None:
+            self.welcome.set_autostart_checked(enabled)
+
+    def _refresh_tray(self) -> None:
+        self.tray.set_word_count("В словаре " + ru.plural(len(self.lexicon), ru.WORDS))
+
+    def _palette(self):
+        return palette_for(self.settings.theme, self._telegram_bg)
 
     # ---- Qt thread ---------------------------------------------------------
 
@@ -194,7 +302,10 @@ class Application(QObject):
     # ---- colours -----------------------------------------------------------
 
     def apply_palette(self, *_args) -> None:
-        self.overlay.set_palette(palette_for(self.settings.theme, self._telegram_bg))
+        self.overlay.set_palette(self._palette())
+        window = self.settings_window
+        if window is not None and window.isVisible():
+            window.refresh_preview()
 
     def _sample_telegram(self, anchor: Optional[Anchor]) -> None:
         """Read the background of Telegram's message field, now and then.
@@ -371,22 +482,37 @@ def _parse_args(argv) -> argparse.Namespace:
                         help="печатать в консоль состояние программы (для проверки)")
     parser.add_argument("--db", default=None,
                         help="путь к файлу базы (по умолчанию в %%APPDATA%%\\TelegramSuggest)")
+    parser.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--exit-after", type=float, default=0.0, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
+
+
+def _mutex_name(db: Optional[str]) -> str:
+    """One running copy per dictionary (a test copy with --db does not collide)."""
+    if not db:
+        return _MUTEX_NAME
+    import hashlib
+    from pathlib import Path
+
+    digest = hashlib.sha1(str(Path(db).resolve()).lower().encode("utf-8")).hexdigest()[:12]
+    return f"{_MUTEX_NAME}.{digest}"
 
 
 def main(argv=None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
 
-    mutex = w.CreateMutexW(None, False, _MUTEX_NAME)
+    mutex = w.CreateMutexW(None, False, _mutex_name(args.db))
     already_running = ctypes.get_last_error() == w.ERROR_ALREADY_EXISTS
 
     qt_app = QApplication(sys.argv[:1])
     qt_app.setApplicationName("TelegramSuggest")
     qt_app.setApplicationDisplayName(APP_TITLE)
     qt_app.setQuitOnLastWindowClosed(False)
+    ui_style.apply(qt_app)
 
     if already_running:
+        if args.autostart:
+            return 0
         QMessageBox.information(
             None, APP_TITLE,
             "Программа уже запущена.\n\n"
@@ -409,7 +535,7 @@ def main(argv=None) -> int:
         gc.freeze()
         if not QSystemTrayIcon.isSystemTrayAvailable():
             log.warning("system tray is not available")
-        app = Application(store, settings, lexicon, diag=args.diag)
+        app = Application(store, settings, lexicon, diag=args.diag, quiet=args.autostart)
         app.start()
     except Exception:
         log.exception("startup failed")
