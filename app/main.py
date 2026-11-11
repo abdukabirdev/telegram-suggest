@@ -20,6 +20,7 @@ from ctypes import wintypes
 from typing import Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from . import inserter
@@ -34,6 +35,7 @@ from .paths import database_path
 from .positioning import Anchor, Locator, WindowStrategy, monitor_work_area, place
 from .settings import Settings
 from .store import Store
+from .theme import palette_for, sample_background
 from .tray import APP_TITLE, Tray
 from .window_watch import WindowWatch
 from .worker import EngineWorker
@@ -43,6 +45,9 @@ log = logging.getLogger(__name__)
 _POLL_ACTIVE_MS = 40
 _POLL_IDLE_MS = 250
 _HOOK_SILENCE_S = 20.0
+_GAP = 6                    # between the text field and the suggestion panel
+_SAMPLE_EVERY_S = 2.0       # how often Telegram's colours are re-read
+_HINT_DELAY_S = 0.3         # Ctrl held this long shows the key numbers
 _MUTEX_NAME = "Local\\TelegramSuggest.SingleInstance"
 
 
@@ -64,7 +69,7 @@ class Application(QObject):
         self.diag = diag
 
         self.bridge = Bridge()
-        self.overlay = Overlay(settings.theme)
+        self.overlay = Overlay(settings.theme, settings.key_hints)
         self.tray = Tray(self)
         self.watch = WindowWatch()
         self._fallback = WindowStrategy()
@@ -99,12 +104,20 @@ class Application(QObject):
         self._overlay_click_time = 0.0
         self._last_reinstall = time.monotonic()
         self._last_diag = None
+        self._telegram_bg = None
+        self._last_sample = 0.0
+        self._ctrl_since: Optional[float] = None
 
         self.bridge.suggestions.connect(self._on_suggestions)
         self.bridge.anchor.connect(self._on_anchor)
         self.bridge.pause_hotkey.connect(lambda: self.toggle_pause(notify=True))
         self.bridge.diag.connect(self._on_diag)
         self.overlay.clicked.connect(self._on_overlay_clicked)
+        self.overlay.delete_requested.connect(self._on_overlay_delete)
+        try:
+            QGuiApplication.styleHints().colorSchemeChanged.connect(self.apply_palette)
+        except AttributeError:          # Qt older than 6.5
+            pass
         self.tray.pause_toggled.connect(self.toggle_pause)
         self.tray.quit_requested.connect(QApplication.quit)
 
@@ -174,6 +187,39 @@ class Application(QObject):
         self._overlay_click_time = time.monotonic()
         self.worker.post("accept", index)
 
+    def _on_overlay_delete(self, index: int) -> None:
+        self._overlay_click_time = time.monotonic()
+        self.worker.post("forget", index)
+
+    # ---- colours -----------------------------------------------------------
+
+    def apply_palette(self, *_args) -> None:
+        self.overlay.set_palette(palette_for(self.settings.theme, self._telegram_bg))
+
+    def _sample_telegram(self, anchor: Optional[Anchor]) -> None:
+        """Read the background of Telegram's message field, now and then.
+
+        Only one colour is computed from the pixels; they are not kept.
+        """
+        if (self.settings.theme != "telegram" or anchor is None
+                or anchor.source == "window" or anchor.is_password):
+            return
+        now = time.monotonic()
+        if now - self._last_sample < _SAMPLE_EVERY_S:
+            return
+        if w.GetForegroundWindow() != self._target_hwnd:
+            return
+        field = (anchor.left, anchor.top, anchor.right, anchor.bottom)
+        ours = self.overlay.native_rect()
+        if ours is not None and not (ours[2] <= field[0] or field[2] <= ours[0]
+                                     or ours[3] <= field[1] or field[3] <= ours[1]):
+            return                      # our own window covers the field
+        self._last_sample = now
+        color = sample_background(field)
+        if color is not None and color != self._telegram_bg:
+            self._telegram_bg = color
+            self.apply_palette()
+
     def _on_suggestions(self, texts: list) -> None:
         if texts and not self._active:
             self._poll()            # typing started before the timer noticed Telegram
@@ -190,6 +236,8 @@ class Application(QObject):
         if blocked != self._blocked:
             self._blocked = blocked
             self.worker.post("blocked", blocked)
+        if self._active and hwnd == self._target_hwnd:
+            self._sample_telegram(anchor)
         if self.overlay.isVisible():
             self._reposition()
         if self.diag:
@@ -204,20 +252,26 @@ class Application(QObject):
         if anchor is None:
             self.overlay.hide()
             return
-        offset = (self.settings.overlay_offset_x, self.settings.overlay_offset_y)
         work = monitor_work_area(anchor.left, anchor.top)
-        x, y = place(anchor, self.overlay.physical_size(), work, offset)
+        x, y = self._place(anchor, self.overlay.physical_size(), work)
         self.overlay.show_at(x, y)
         actual = self.overlay.native_rect()
         if actual is not None:
             size = (actual[2] - actual[0], actual[3] - actual[1])
             if size != self.overlay.physical_size():
                 # the window landed on a monitor with another scale
-                x, y = place(anchor, size, work, offset)
+                x, y = self._place(anchor, size, work)
                 self.overlay.show_at(x, y)
 
+    def _place(self, anchor: Anchor, size, work) -> tuple[int, int]:
+        # The window is larger than the visible panel by the shadow margin:
+        # line up the panel, not the window, with the text field.
+        margin = self.overlay.margin_physical()
+        offset = (self.settings.overlay_offset_x - margin, self.settings.overlay_offset_y)
+        return place(anchor, size, work, offset, _GAP - margin)
+
     def _cursor_over_overlay(self) -> bool:
-        rect = self.overlay.native_rect()
+        rect = self.overlay.native_panel_rect()
         if rect is None:
             return False
         point = wintypes.POINT()
@@ -255,6 +309,7 @@ class Application(QObject):
                 self.worker.post("reset")
                 QTimer.singleShot(150, lambda: self.locator.request(self._target_hwnd))
         self._mouse_was_down = pressed
+        self._update_key_numbers()
 
         # Windows drops a low-level hook that was once too slow, without telling.
         now = time.monotonic()
@@ -262,6 +317,19 @@ class Application(QObject):
                 and now - self._last_reinstall > _HOOK_SILENCE_S):
             self._last_reinstall = now
             self.hook.reinstall()
+
+    def _update_key_numbers(self) -> None:
+        """Key numbers on the words appear while Ctrl alone is held a moment."""
+        held = (self.overlay.isVisible() and w.key_down(w.VK_CONTROL)
+                and not w.key_down(w.VK_MENU) and not w.key_down(w.VK_SHIFT))
+        if not held:
+            self._ctrl_since = None
+            self.overlay.set_ctrl_held(False)
+            return
+        now = time.monotonic()
+        if self._ctrl_since is None:
+            self._ctrl_since = now
+        self.overlay.set_ctrl_held(now - self._ctrl_since >= _HINT_DELAY_S)
 
     # ---- diagnostics (console only, never written to the log) ---------------
 
