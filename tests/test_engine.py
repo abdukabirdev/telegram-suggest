@@ -282,6 +282,30 @@ def test_trailing_joiner_is_counted_for_backspaces(engine, lexicon):
 
 # ---- reset (caret moved, paste, focus lost) --------------------------------
 
+def test_forget_removes_word_and_keeps_typing_state(engine, lexicon):
+    type_keys(engine, "салом саломат\n")
+    type_keys(engine, "сал")
+    assert set(texts(engine.suggestions())) == {"салом", "саломат"}
+    index = texts(engine.suggestions()).index("саломат")
+    assert engine.forget(index) == "саломат"
+    assert "саломат" not in lexicon
+    assert texts(engine.suggestions()) == ["салом"]
+    assert engine.prefix == "сал"
+    assert engine.forget(3) is None
+
+
+def test_forget_does_not_relearn_the_pending_word(engine, lexicon):
+    type_keys(engine, "кабир\n")
+    type_keys(engine, "ка")
+    insertion = engine.accept(0)                # "кабир " is pending now
+    assert insertion.text == "кабир "
+    type_keys(engine, "ка")
+    assert texts(engine.suggestions()) == ["кабир"]
+    engine.forget(0)
+    type_keys(engine, "л ")                     # the next word starts and ends
+    assert "кабир" not in lexicon
+
+
 def test_reset_drops_unfinished_unknown_word(engine, lexicon):
     type_keys(engine, "приве")
     engine.reset()

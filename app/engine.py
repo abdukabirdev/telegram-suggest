@@ -115,6 +115,30 @@ class Engine:
         self._shown = None
         self._dismissed = True
 
+    def invalidate(self) -> None:
+        """The dictionary changed behind our back: recompute the suggestions."""
+        self._shown = None
+
+    def forget(self, index: int) -> Optional[str]:
+        """Delete the suggestion number ``index`` from the dictionary.
+
+        Returns the deleted dictionary key, None if there was no such item.
+        """
+        items = self.suggestions()
+        if not 0 <= index < len(items):
+            return None
+        word = items[index].word
+        self.lexicon.delete(word)
+        pending = self._pending
+        if pending is not None and pending.raw.strip(JOINERS).lower() == word:
+            # it would be learned again as soon as the next word starts
+            self._pending = None
+            self._after = ""
+        if self._prev is not None and self._prev.lower() == word:
+            self._prev = None
+        self._shown = None
+        return word
+
     # ---- suggestions -------------------------------------------------------
 
     @property
