@@ -110,6 +110,14 @@ def test_overlay_right_click_deletes_through_worker(application):
     assert application.posted == [("forget", 2)]
 
 
+def test_test_copy_never_touches_autostart(qt_app, store, clock, registry):
+    settings = Settings()
+    app = Application(store, settings, Lexicon(store, settings, clock=clock), test_copy=True)
+    app.set_autostart(True)
+    assert registry["enabled"] is False
+    app.overlay.hide()
+
+
 def test_mutex_name_per_dictionary(tmp_path):
     assert _mutex_name(None) == main_module._MUTEX_NAME
     a = _mutex_name(str(tmp_path / "a.db"))

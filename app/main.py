@@ -68,13 +68,16 @@ class Bridge(QObject):
 
 class Application(QObject):
     def __init__(self, store: Store, settings: Settings, lexicon: Lexicon,
-                 diag: bool = False, quiet: bool = False) -> None:
+                 diag: bool = False, quiet: bool = False, test_copy: bool = False) -> None:
         super().__init__()
         self.store = store
         self.settings = settings
         self.lexicon = lexicon
         self.diag = diag
         self.quiet = quiet                  # started with Windows: no greeting balloon
+        # A copy with its own dictionary (--db), e.g. the check after a build:
+        # it leaves autostart alone and shows no welcome.
+        self.test_copy = test_copy
         self.settings_window: Optional[SettingsWindow] = None
         self.welcome: Optional[WelcomeWindow] = None
 
@@ -147,11 +150,14 @@ class Application(QObject):
         self.hook.installed.wait(3.0)
         self.tray.show()
         self._timer.start(_POLL_IDLE_MS)
-        # The .exe may have been moved since autostart was turned on
-        autostart.sync(self.settings.autostart)
+        if not self.test_copy:
+            # The .exe may have been moved since autostart was turned on
+            autostart.sync(self.settings.autostart)
         self.tray.set_autostart(self.settings.autostart)
         self._refresh_tray()
-        if not self.settings.welcome_shown:
+        if self.test_copy:
+            pass
+        elif not self.settings.welcome_shown:
             self._first_run()
         elif not self.quiet:
             self.tray.notify(
@@ -254,6 +260,9 @@ class Application(QObject):
         self._apply_autostart(enabled)
 
     def _apply_autostart(self, enabled: bool) -> None:
+        if self.test_copy:
+            self.tray.set_autostart(enabled)
+            return
         if not autostart.sync(enabled):
             QMessageBox.warning(
                 None, APP_TITLE,
@@ -535,7 +544,8 @@ def main(argv=None) -> int:
         gc.freeze()
         if not QSystemTrayIcon.isSystemTrayAvailable():
             log.warning("system tray is not available")
-        app = Application(store, settings, lexicon, diag=args.diag, quiet=args.autostart)
+        app = Application(store, settings, lexicon, diag=args.diag, quiet=args.autostart,
+                          test_copy=args.db is not None)
         app.start()
     except Exception:
         log.exception("startup failed")
