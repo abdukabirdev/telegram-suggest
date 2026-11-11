@@ -58,6 +58,9 @@ QLabel[role="hint"] {{ color: {c.muted}; }}
 QLabel[role="step"] {{ background: {c.accent}; color: white; border-radius: 11px;
     min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px;
     font-weight: 600; qproperty-alignment: AlignCenter; }}
+QLabel[role="key"] {{ background: {c.surface}; border: 1px solid {c.border};
+    border-bottom: 2px solid {c.border}; border-radius: 5px; padding: 1px 7px;
+    font-weight: 600; font-size: 12px; }}
 QFrame[role="card"] {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: 10px; }}
 
 QListWidget#Sidebar {{ background: {c.sidebar}; border: none; border-right: 1px solid {c.border};
@@ -87,11 +90,9 @@ QLineEdit, QSpinBox, QComboBox {{ background: {c.surface}; border: 1px solid {c.
     border-radius: 7px; padding: 6px 9px; selection-background-color: {c.accent};
     selection-color: white; }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border-color: {c.accent}; }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{ background: {c.surface}; border: 1px solid {c.border};
     selection-background-color: {c.accent_soft}; selection-color: {c.text}; outline: 0;
     padding: 4px; }}
-QSpinBox::up-button, QSpinBox::down-button {{ width: 18px; border: none; }}
 
 QCheckBox {{ spacing: 9px; padding: 3px 0; }}
 
