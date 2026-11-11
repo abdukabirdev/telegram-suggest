@@ -224,6 +224,28 @@ def test_no_suggestions_inside_link_or_number(engine):
     assert engine.suggestions() == []
 
 
+def test_emoji_shortcode_is_left_to_telegram(engine, lexicon):
+    type_keys(engine, "смайл салом\n")
+    type_keys(engine, ":с")
+    assert engine.suggestions() == []          # ":смайл" belongs to Telegram
+    type_keys(engine, "майл ")
+    assert lexicon.get("смайл").freq == 1
+    type_keys(engine, "с")
+    assert engine.suggestions() != []
+
+
+def test_colon_followed_by_space_is_plain_punctuation(engine, lexicon):
+    type_keys(engine, "мана: салом\n")
+    assert sorted(w.word for w in lexicon.search()) == ["мана", "салом"]
+    assert lexicon.bigram_count() == 1
+
+
+def test_deleted_colon_does_not_block_next_word(engine):
+    type_keys(engine, "салом\n")
+    type_keys(engine, ":\bс")
+    assert texts(engine.suggestions()) == ["салом"]
+
+
 def test_typing_continues_normally_after_link(engine, lexicon):
     type_keys(engine, "мана https://t.me/abc курдингми ака\n")
     assert sorted(w.word for w in lexicon.search()) == ["ака", "курдингми", "мана"]
@@ -289,6 +311,19 @@ def test_reset_breaks_context(engine, lexicon):
     type_keys(engine, "а")
     # capital right after a reset is treated as ambiguous, the word is kept as typed
     assert texts(engine.suggestions()) == ["Алейкум"]
+
+
+def test_discard_forgets_without_learning(engine, lexicon):
+    type_keys(engine, "привет\n")
+    type_keys(engine, "секрет ")             # finished, but still pending
+    engine.discard()
+    type_keys(engine, "привет")              # a known word in the buffer
+    engine.discard()
+    assert engine.prefix == ""
+    assert "секрет" not in lexicon
+    assert lexicon.get("привет").freq == 1
+    type_keys(engine, "мир\n")
+    assert lexicon.bigram_count() == 0
 
 
 # ---- next word prediction --------------------------------------------------

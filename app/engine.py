@@ -47,6 +47,7 @@ class Engine:
         self._tainted = False       # inside a link/handle/path: stay silent
         self._taint_len = 0
         self._dismissed = False
+        self._last_char = ""
         self._shown: Optional[list[Suggestion]] = None
 
     # ---- input events ------------------------------------------------------
@@ -58,6 +59,7 @@ class Engine:
 
     def backspace(self) -> None:
         self._shown = None
+        self._last_char = ""
         if self._tainted:
             self._taint_len -= 1
             if self._taint_len <= 0:
@@ -83,6 +85,7 @@ class Engine:
     def reset(self) -> None:
         """Caret moved, text pasted, selection changed, focus lost..."""
         self._shown = None
+        self._last_char = ""
         word = self.buffer.strip(JOINERS)
         if word and word in self.lexicon:
             # An unfinished buffer is dropped, unless it is a word we already
@@ -96,6 +99,16 @@ class Engine:
         self._tainted = False
         self._taint_len = 0
         self._dismissed = False
+
+    def discard(self) -> None:
+        """Forget everything typed so far without learning any of it.
+
+        For password fields: nothing typed there may reach the dictionary.
+        """
+        self.buffer = ""
+        self._pending = None
+        self._after = ""
+        self.reset()
 
     def dismiss(self) -> None:
         """Esc: hide suggestions until the next word."""
@@ -155,6 +168,11 @@ class Engine:
 
     def _feed_char(self, ch: str) -> None:
         self._shown = None
+        before, self._last_char = self._last_char, ch
+        if before == ":" and ch.isalpha() and not self.buffer and not self._tainted:
+            # ":smile" is Telegram's own emoji search with its own Tab/Enter
+            self._taint()
+            return
         if ch in "\r\n":
             self._enter()
             return
