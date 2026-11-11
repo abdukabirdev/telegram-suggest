@@ -22,7 +22,8 @@ log = logging.getLogger(__name__)
 RGB = tuple[int, int, int]
 
 THEMES = ("telegram", "system", "dark", "light")
-DARK_BG: RGB = (0x21, 0x25, 0x2b)
+DARK_BG: RGB = (0x17, 0x21, 0x2b)      # Telegram's night theme
+
 LIGHT_BG: RGB = (0xff, 0xff, 0xff)
 
 # Telegram's own blues: day theme and night theme
