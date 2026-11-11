@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 APP_TITLE = "Подсказки для Telegram"
@@ -36,22 +36,50 @@ def make_icon(paused: bool = False) -> QIcon:
 class Tray(QObject):
     pause_toggled = Signal()
     quit_requested = Signal()
+    page_requested = Signal(str)        # a page of the settings window
+    help_requested = Signal()
+    autostart_toggled = Signal(bool)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._paused = False
         self._icon = QSystemTrayIcon(make_icon(False), self)
         self._menu = QMenu()
-        self._pause_action = QAction(self._menu)
-        self._pause_action.triggered.connect(self.pause_toggled)
-        self._menu.addAction(self._pause_action)
+
+        self._status = self._add("")
+        self._status.setEnabled(False)
         self._menu.addSeparator()
-        quit_action = QAction("Выход", self._menu)
-        quit_action.triggered.connect(self.quit_requested)
-        self._menu.addAction(quit_action)
+        self._pause_action = self._add("", self.pause_toggled.emit)
+        self._menu.addSeparator()
+        self._add("Мои слова…", lambda: self.page_requested.emit("words"))
+        self._add("Загрузить историю из Telegram…", lambda: self.page_requested.emit("import"))
+        self._add("Настройки…", lambda: self.page_requested.emit("suggest"))
+        self._autostart = self._add("Запускать вместе с Windows")
+        self._autostart.setCheckable(True)
+        self._autostart.toggled.connect(self.autostart_toggled)
+        self._add("Как пользоваться", self.help_requested.emit)
+        self._menu.addSeparator()
+        self._add("Выход", self.quit_requested.emit)
+
         self._icon.setContextMenu(self._menu)
         self._icon.activated.connect(self._on_activated)
         self.set_paused(False)
+
+    def _add(self, text: str, slot=None) -> QAction:
+        action = QAction(text, self._menu)
+        if slot is not None:
+            action.triggered.connect(lambda _checked=False: slot())
+        self._menu.addAction(action)
+        return action
+
+    def set_autostart(self, enabled: bool) -> None:
+        self._autostart.blockSignals(True)
+        self._autostart.setChecked(enabled)
+        self._autostart.blockSignals(False)
+
+    def set_word_count(self, text: str) -> None:
+        """A greyed first line of the menu, e.g. "В словаре 1 234 слова"."""
+        self._status.setText(text)
 
     def show(self) -> None:
         self._icon.show()
@@ -72,9 +100,10 @@ class Tray(QObject):
     def notify(self, text: str) -> None:
         self._icon.showMessage(APP_TITLE, text, make_icon(self._paused), 4000)
 
+    def menu(self) -> QMenu:
+        return self._menu
+
     def _on_activated(self, reason) -> None:
         # a plain left click opens the same menu: easier than a right click
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            from PySide6.QtGui import QCursor
-
             self._menu.popup(QCursor.pos())
