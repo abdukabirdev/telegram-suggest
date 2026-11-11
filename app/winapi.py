@@ -10,6 +10,7 @@ from ctypes import wintypes
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 
 LRESULT = ctypes.c_ssize_t
 ULONG_PTR = ctypes.c_size_t
@@ -100,6 +101,10 @@ MONITOR_DEFAULTTONEAREST = 2
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ERROR_ALREADY_EXISTS = 183
 
+SRCCOPY = 0x00CC0020
+BI_RGB = 0
+DIB_RGB_COLORS = 0
+
 # ---- structures --------------------------------------------------------------
 
 
@@ -174,6 +179,22 @@ class MONITORINFO(ctypes.Structure):
     ]
 
 
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [
+        ("biSize", wintypes.DWORD),
+        ("biWidth", wintypes.LONG),
+        ("biHeight", wintypes.LONG),
+        ("biPlanes", wintypes.WORD),
+        ("biBitCount", wintypes.WORD),
+        ("biCompression", wintypes.DWORD),
+        ("biSizeImage", wintypes.DWORD),
+        ("biXPelsPerMeter", wintypes.LONG),
+        ("biYPelsPerMeter", wintypes.LONG),
+        ("biClrUsed", wintypes.DWORD),
+        ("biClrImportant", wintypes.DWORD),
+    ]
+
+
 HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
 # ---- prototypes --------------------------------------------------------------
@@ -234,6 +255,21 @@ MonitorFromPoint = _proto(user32.MonitorFromPoint, HMONITOR, wintypes.POINT, win
 GetMonitorInfoW = _proto(user32.GetMonitorInfoW, wintypes.BOOL,
                          HMONITOR, ctypes.POINTER(MONITORINFO))
 GetDpiForWindow = _proto(user32.GetDpiForWindow, wintypes.UINT, wintypes.HWND)
+GetDC = _proto(user32.GetDC, wintypes.HDC, wintypes.HWND)
+ReleaseDC = _proto(user32.ReleaseDC, ctypes.c_int, wintypes.HWND, wintypes.HDC)
+
+CreateCompatibleDC = _proto(gdi32.CreateCompatibleDC, wintypes.HDC, wintypes.HDC)
+CreateCompatibleBitmap = _proto(gdi32.CreateCompatibleBitmap, wintypes.HBITMAP,
+                                wintypes.HDC, ctypes.c_int, ctypes.c_int)
+SelectObject = _proto(gdi32.SelectObject, wintypes.HGDIOBJ, wintypes.HDC, wintypes.HGDIOBJ)
+BitBlt = _proto(gdi32.BitBlt, wintypes.BOOL,
+                wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD)
+GetDIBits = _proto(gdi32.GetDIBits, ctypes.c_int,
+                   wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+                   ctypes.c_void_p, ctypes.POINTER(BITMAPINFOHEADER), wintypes.UINT)
+DeleteObject = _proto(gdi32.DeleteObject, wintypes.BOOL, wintypes.HGDIOBJ)
+DeleteDC = _proto(gdi32.DeleteDC, wintypes.BOOL, wintypes.HDC)
 
 OpenProcess = _proto(kernel32.OpenProcess, wintypes.HANDLE,
                      wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
