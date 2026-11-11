@@ -382,7 +382,7 @@ def learn_messages(
     marks: dict,
     progress: Optional[Callable[[int, int], None]] = None,
     cancelled: Optional[Callable[[], bool]] = None,
-    flush_every: int = 5000,
+    flush_every: int = 20000,
 ) -> ImportResult:
     """Teach the lexicon the user's own messages.
 
@@ -395,6 +395,7 @@ def learn_messages(
     todo.sort(key=lambda m: (m.chat, m.id))
     min_len = lexicon.settings.min_word_len
     total = len(todo)
+    n = 0
     for n, message in enumerate(todo, 1):
         if cancelled is not None and n % 50 == 0 and cancelled():
             result.cancelled = True
@@ -420,5 +421,5 @@ def learn_messages(
                 progress(n, total)
     lexicon.flush()
     if progress is not None:
-        progress(total if not result.cancelled else n, total)
+        progress(n if result.cancelled else total, total)
     return result
