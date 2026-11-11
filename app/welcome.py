@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from .overlay import Overlay
 from .settings_window import button, label
 from .theme import Palette
 from .tray import APP_TITLE, make_icon
+from .ui_style import Toggle
 
 # (keys, what they do); keys are shown as keyboard "caps"
 TIPS = [
@@ -85,7 +86,7 @@ class WelcomeWindow(QWidget):
             "Значок «А» возле часов (справа внизу) открывает настройки, список ваших слов "
             "и выход. Если значка не видно, нажмите стрелку ^ возле часов.", "hint"))
 
-        self._autostart = QCheckBox("Запускать вместе с Windows")
+        self._autostart = Toggle("Запускать вместе с Windows")
         self._autostart.setChecked(autostart)
         self._autostart.toggled.connect(self.autostart_changed)
         layout.addWidget(self._autostart)

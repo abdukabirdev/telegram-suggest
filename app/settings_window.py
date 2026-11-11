@@ -15,7 +15,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame,
                                QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QListWidget, QMessageBox, QProgressBar, QPushButton, QScrollArea,
                                QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
@@ -27,6 +27,7 @@ from .paths import data_dir
 from .settings import Settings
 from .theme import Palette
 from .tray import APP_TITLE, make_icon
+from .ui_style import Toggle
 
 log = logging.getLogger(__name__)
 
@@ -211,8 +212,10 @@ class SettingsWindow(QWidget):
 
     # ---- navigation --------------------------------------------------------
 
-    def show_page(self, name: str) -> None:
-        self._sidebar.setCurrentRow(PAGES.index(name) if name in PAGES else 0)
+    def show_page(self, name: Optional[str]) -> None:
+        """Bring the window up on page ``name``; None keeps the current page."""
+        if name is not None:
+            self._sidebar.setCurrentRow(PAGES.index(name) if name in PAGES else 0)
         if self.isMinimized():
             self.showNormal()
         self.show()
@@ -246,8 +249,8 @@ class SettingsWindow(QWidget):
         self.store.set_setting(name, value)
         self.settings_changed.emit(name)
 
-    def _check(self, name: str, text: str) -> QCheckBox:
-        box = QCheckBox(text)
+    def _check(self, name: str, text: str) -> Toggle:
+        box = Toggle(text)
         box.setChecked(bool(getattr(self.settings, name)))
         box.toggled.connect(lambda value: self._set(name, bool(value)))
         return box

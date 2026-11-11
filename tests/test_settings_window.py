@@ -145,3 +145,16 @@ def test_welcome_window(qt_app):
     welcome._import()
     assert asked == [1]
     welcome.deleteLater()
+
+
+def test_switches_behave_like_check_boxes(window):
+    from app.ui_style import Toggle
+
+    window.show_page("general")
+    switch = window._autostart
+    assert isinstance(switch, Toggle)
+    switch.click()
+    assert switch.isChecked() and window.settings.autostart
+    switch.click()
+    assert not switch.isChecked() and not window.settings.autostart
+    assert switch.heightForWidth(200) >= switch.heightForWidth(2000)
