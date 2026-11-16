@@ -408,17 +408,25 @@ class Lexicon:
         now: Optional[float] = None,
         limit: Optional[int] = None,
     ) -> list[Suggestion]:
-        """Most likely words after ``prev`` (no letters typed yet)."""
+        """Most likely words after ``prev`` (no letters typed yet).
+
+        Only pairs typed at least ``next_word_min_count`` times are offered:
+        a pair seen once is a coincidence, not a habit, and an unasked-for
+        strip after every space must earn its place.
+        """
         if limit is None:
             limit = self.settings.max_suggestions
         if now is None:
             now = self._clock()
+        min_count = max(int(self.settings.next_word_min_count), 1)
         result: list[Suggestion] = []
         with self._lock:
             followers = self._bigrams.get(nfc(prev).lower())
             if not followers:
                 return []
             for nxt, rec in followers.items():
+                if rec[0] < min_count:
+                    continue
                 entry = self._words.get(nxt)
                 if entry is None or not entry.indexed:
                     continue
@@ -478,6 +486,21 @@ class Lexicon:
                 pair for pair in self._dirty_bigrams if key not in pair
             }
             self.store.delete_word(key)
+            return True
+
+    def delete_pair(self, prev: str, nxt: str) -> bool:
+        """Stop offering ``nxt`` after ``prev``; both words stay known."""
+        prev_key = nfc(prev).lower()
+        nxt_key = nfc(nxt).lower()
+        with self._lock:
+            followers = self._bigrams.get(prev_key)
+            if not followers or nxt_key not in followers:
+                return False
+            del followers[nxt_key]
+            if not followers:
+                del self._bigrams[prev_key]
+            self._dirty_bigrams.discard((prev_key, nxt_key))
+            self.store.delete_bigram(prev_key, nxt_key)
             return True
 
     def clear(self) -> None:
