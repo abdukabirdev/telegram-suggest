@@ -133,6 +133,12 @@ class Store:
                 "DELETE FROM bigrams WHERE prev = ? OR next = ?", (word, word)
             )
 
+    def delete_bigram(self, prev: str, nxt: str) -> None:
+        with self.bulk():
+            self._conn.execute(
+                "DELETE FROM bigrams WHERE prev = ? AND next = ?", (prev, nxt)
+            )
+
     def clear(self) -> None:
         """Remove every learned word and bigram. Settings are kept."""
         with self._lock:
