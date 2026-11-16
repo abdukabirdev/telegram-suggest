@@ -56,7 +56,7 @@ _MUTEX_NAME = "Local\\TelegramSuggest.SingleInstance"
 
 # Settings whose change needs the dictionary index rebuilt / only new suggestions
 _RANKING = frozenset({"min_suggest_len", "half_life_days", "bigram_weight", "min_word_len"})
-_SUGGESTING = frozenset({"max_suggestions", "min_prefix_len", "predict_next_word",
+_SUGGESTING = frozenset({"max_suggestions", "min_prefix_len", "next_word",
                          "cross_script", "cross_script_penalty"})
 
 

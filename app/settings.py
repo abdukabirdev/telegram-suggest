@@ -24,7 +24,10 @@ class Settings:
     # Shorter words are still learned (they give bigram context) but are not
     # offered: completing "да" saves nothing and wastes a slot.
     min_suggest_len: int = 3
-    predict_next_word: bool = False
+    # Right after a space, offer the words that usually follow the last one
+    # ("ассалому" -> "алайкум"). A pair must have been typed this many times.
+    next_word: bool = True
+    next_word_min_count: int = 2
 
     # Learning and ranking
     min_word_len: int = 2

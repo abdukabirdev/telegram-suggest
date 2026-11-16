@@ -328,7 +328,7 @@ class SettingsWindow(QWidget):
         grid.setColumnStretch(2, 1)
         box.addLayout(grid)
         box.addWidget(self._check(
-            "predict_next_word",
+            "next_word",
             "Предлагать следующее слово сразу после пробела (по вашим частым сочетаниям)"))
         box.addWidget(self._check(
             "cross_script",
