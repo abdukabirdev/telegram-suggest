@@ -49,6 +49,7 @@ class Engine:
         self._dismissed = False
         self._last_char = ""
         self._shown: Optional[list[Suggestion]] = None
+        self._next_of: Optional[str] = None   # shown words follow this one
 
     # ---- input events ------------------------------------------------------
 
@@ -122,12 +123,18 @@ class Engine:
     def forget(self, index: int) -> Optional[str]:
         """Delete the suggestion number ``index`` from the dictionary.
 
-        Returns the deleted dictionary key, None if there was no such item.
+        A predicted next word is a fine word, just not after this one: only
+        the pair is forgotten then. Returns the dictionary key of the
+        suggestion, None if there was no such item.
         """
         items = self.suggestions()
         if not 0 <= index < len(items):
             return None
         word = items[index].word
+        if self._next_of is not None:
+            self.lexicon.delete_pair(self._next_of, word)
+            self._shown = None
+            return word
         self.lexicon.delete(word)
         pending = self._pending
         if pending is not None and pending.raw.strip(JOINERS).lower() == word:
@@ -145,8 +152,14 @@ class Engine:
     def prefix(self) -> str:
         return self.buffer
 
+    @property
+    def predicting(self) -> bool:
+        """The suggestions are next words, not completions of typed letters."""
+        return bool(self.suggestions()) and self._next_of is not None
+
     def suggestions(self) -> list[Suggestion]:
         if self._shown is None:
+            self._next_of = None
             self._shown = self._compute()
         return self._shown
 
@@ -177,12 +190,14 @@ class Engine:
         if not buf:
             pending = self._pending
             if (
-                self.settings.predict_next_word
+                self.settings.next_word
                 and pending is not None
                 and self._after
                 and self._after.strip(" ") == ""
             ):
-                return self.lexicon.predict_next(pending.raw.strip(JOINERS))
+                prev = pending.raw.strip(JOINERS)
+                self._next_of = prev
+                return self.lexicon.predict_next(prev)
             return []
         if len(buf) < self.settings.min_prefix_len:
             return []
