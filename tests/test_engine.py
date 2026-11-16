@@ -352,21 +352,67 @@ def test_discard_forgets_without_learning(engine, lexicon):
 
 # ---- next word prediction --------------------------------------------------
 
-def test_predict_next_word_is_optional(engine, settings):
-    type_keys(engine, "Салом алейкум\n")
-    type_keys(engine, "Салом ")
+def test_next_word_after_a_habitual_pair(engine):
+    type_keys(engine, "Ассалому алайкум\n")
+    type_keys(engine, "Ассалому ")
+    assert engine.suggestions() == []          # typed once: not a habit yet
+    type_keys(engine, "алайкум\n")
+    type_keys(engine, "Ассалому ")
+    assert texts(engine.suggestions()) == ["алайкум"]
+    assert engine.predicting
+    assert engine.accept(0) == Insertion(0, "алайкум ")
+    assert engine.prefix == ""
+
+
+def test_next_word_can_be_turned_off(engine, settings):
+    type_keys(engine, "салом алейкум\nсалом алейкум\n")
+    settings.next_word = False
+    type_keys(engine, "салом ")
     assert engine.suggestions() == []
-    settings.predict_next_word = True
+    settings.next_word = True
     type_keys(engine, "\b ")
     assert texts(engine.suggestions()) == ["алейкум"]
-    assert engine.accept(0) == Insertion(0, "алейкум ")
 
 
-def test_predict_next_not_after_punctuation(engine, settings):
-    settings.predict_next_word = True
-    type_keys(engine, "Салом алейкум\n")
+def test_next_word_not_after_punctuation(engine):
+    type_keys(engine, "Салом алейкум\nСалом алейкум\n")
     type_keys(engine, "Салом. ")
     assert engine.suggestions() == []
+    type_keys(engine, "\b\b, ")
+    assert engine.suggestions() == []
+
+
+def test_next_word_gives_way_to_typed_letters(engine):
+    type_keys(engine, "салом алейкум\nсалом алейкум\nсалом ака\n")
+    type_keys(engine, "салом ")
+    assert engine.predicting
+    type_keys(engine, "а")
+    assert not engine.predicting
+    assert texts(engine.suggestions())[0] == "алейкум"     # the pair still ranks it first
+
+
+def test_next_words_chain(engine):
+    type_keys(engine, "ассалому алайкум ака\n" * 2)
+    type_keys(engine, "ассалому ")
+    engine.accept(0)
+    assert texts(engine.suggestions()) == ["ака"]
+    engine.accept(0)
+    assert engine.suggestions() == []
+
+
+def test_forget_next_word_drops_only_the_pair(engine, lexicon):
+    type_keys(engine, "салом алейкум\nсалом алейкум\n")
+    type_keys(engine, "салом ")
+    assert engine.forget(0) == "алейкум"
+    assert engine.suggestions() == []
+    assert "алейкум" in lexicon and "салом" in lexicon
+    type_keys(engine, "а")
+    assert texts(engine.suggestions()) == ["алейкум"]     # still completed as a word
+
+
+def test_predicting_is_false_without_suggestions(engine):
+    type_keys(engine, "салом ")
+    assert not engine.predicting
 
 
 # ---- multi-character input -------------------------------------------------
