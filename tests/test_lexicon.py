@@ -279,10 +279,29 @@ def test_predict_next(lexicon):
         for _ in range(times):
             lexicon.learn("салом")
             lexicon.learn(word, prev="салом")
-    assert texts(lexicon.predict_next("Салом")) == ["алейкум", "ака", "дўстим"]
+    # "дўстим" followed "салом" only once: a coincidence, not a habit
+    assert texts(lexicon.predict_next("Салом")) == ["алейкум", "ака"]
     assert texts(lexicon.predict_next("салом", limit=1)) == ["алейкум"]
     assert lexicon.predict_next("алейкум") == []
     assert lexicon.predict_next("unknown") == []
+    lexicon.settings.next_word_min_count = 1
+    assert texts(lexicon.predict_next("салом")) == ["алейкум", "ака", "дўстим"]
+
+
+def test_delete_pair_keeps_both_words(lexicon, store):
+    for _ in range(2):
+        lexicon.learn("салом")
+        lexicon.learn("алейкум", prev="салом")
+        lexicon.learn("ака", prev="салом")
+    assert lexicon.delete_pair("Салом", "алейкум")
+    assert texts(lexicon.predict_next("салом")) == ["ака"]
+    assert "алейкум" in lexicon
+    assert not lexicon.delete_pair("салом", "алейкум")
+    assert store.counts() == (3, 1)
+    lexicon.load()                              # gone from the file too
+    assert texts(lexicon.predict_next("салом")) == ["ака"]
+    assert lexicon.delete_pair("салом", "ака")
+    assert lexicon.predict_next("салом") == []
 
 
 # ---- Uzbek letters ---------------------------------------------------------
