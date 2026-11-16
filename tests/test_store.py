@@ -124,6 +124,23 @@ def test_settings_reject_unknown_choices(store):
     assert loaded.import_marks == {}
 
 
+def test_next_word_is_on_for_users_of_the_old_switch(store):
+    # Up to 0.10 every user had the hidden "predict_next_word" = False saved
+    store.set_setting("predict_next_word", False)
+    loaded = Settings.load(store)
+    assert loaded.next_word is True
+    assert loaded.next_word_min_count == 2
+    loaded.next_word = False
+    loaded.save(store)
+    assert Settings.load(store).next_word is False
+
+
+def test_bigram_delete_touches_one_pair(store):
+    store.save_bigrams([("a", "b", 2, 2.0, 1.0), ("a", "c", 1, 1.0, 1.0)])
+    store.delete_bigram("a", "b")
+    assert store.load_bigrams() == [("a", "c", 1, 1.0, 1.0)]
+
+
 def test_default_import_marks_are_not_shared():
     a, b = Settings(), Settings()
     a.import_marks["x"] = 1
