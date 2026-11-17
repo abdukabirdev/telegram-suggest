@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 _CHOICES = {
     "theme": ("telegram", "system", "dark", "light"),
     "key_hints": ("ctrl", "always", "never"),
+    "browser": ("all", "telegram", "off"),
     "log_level": ("DEBUG", "INFO", "WARNING", "ERROR"),
 }
 
@@ -47,9 +48,10 @@ class Settings:
     # Small key numbers on the words: "ctrl" while Ctrl is held | "always" | "never"
     key_hints: str = "ctrl"
 
-    # Where: Telegram Desktop (and forks) always; Telegram Web in a browser
-    # when this is on (only on its own pages, see app.positioning.WebStrategy)
-    web: bool = True
+    # Where: Telegram Desktop (and forks) always. In browsers: "all" text
+    # fields of web pages | "telegram" only Telegram Web | "off". Never the
+    # address bar or a password field (app.positioning.WebStrategy).
+    browser: str = "all"
 
     # Program
     autostart: bool = False
