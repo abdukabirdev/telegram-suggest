@@ -8,7 +8,7 @@ keyboard.
 
 Strategies are tried in order, the first that returns an Anchor wins:
 
-    WebStrategy     browsers only: the focused field, if its page is Telegram Web
+    WebStrategy     browsers only: the focused text field of a web page
     CaretStrategy   system caret (GetGUIThreadInfo): classic Win32 controls
     UiaStrategy     UI Automation: the focused text field of Telegram
     WindowStrategy  geometry of the Telegram window: bottom row, by guess
@@ -46,8 +46,9 @@ class Anchor:
     bottom: int
     source: str
     is_password: bool = False
-    # In a browser: the focus is not in Telegram Web (another site, the
-    # address bar). Keys are ignored there, as in a password field.
+    # In a browser: the focus is not in a text field of a page we serve
+    # (the address bar, a button, a site not allowed). Keys are ignored
+    # there, as in a password field.
     foreign: bool = False
 
 
@@ -207,6 +208,17 @@ class UiaStrategy:
         return lowest
 
 
+def _boxes(values) -> list[Rect]:
+    """UI Automation rectangles come as flat (x, y, width, height, ...) numbers."""
+    numbers = list(values or ())
+    boxes = []
+    for i in range(0, len(numbers) - 3, 4):
+        x, y, width, height = numbers[i:i + 4]
+        if height > 0 and width >= 0:
+            boxes.append((round(x), round(y), round(x + width), round(y + height)))
+    return boxes
+
+
 def is_web_address(url: str, hosts: Sequence[str] = WEB_HOSTS) -> bool:
     try:
         parts = urlsplit(url.strip())
@@ -216,28 +228,40 @@ def is_web_address(url: str, hosts: Sequence[str] = WEB_HOSTS) -> bool:
 
 
 class WebStrategy(UiaStrategy):
-    """Telegram Web in a browser: the focused field and the address of its page.
+    """Browsers: the focused text field of a web page.
 
-    For a browser window it always has an answer: a field of Telegram Web, or
-    a ``foreign`` anchor (another site, the address bar, nothing readable), so
-    that the strategies made for Telegram Desktop never decide there. Other
-    windows are left to them (None).
+    ``mode()`` gives the setting: "all" sites or only Telegram Web
+    ("telegram"). For a browser window there is always an answer: a field to
+    serve, or a ``foreign`` anchor (the address bar and the rest of the
+    browser's own interface, a button or a video in focus, a site not allowed,
+    nothing readable), so that the strategies made for Telegram Desktop never
+    decide there. Other programs are left to them (None).
     """
 
     name = "web"
     _VALUE_PATTERN = 10002
+    _TEXT_PATTERN = 10014
+    _CHARACTER = 0              # TextUnit_Character
+    _START = 0                  # TextPatternRangeEndpoint_Start
     _MAX_DEPTH = 60
     _CHROME_CONTENT = "Chrome_RenderWidgetHostHWND"
+    # Besides Edit, the types a contenteditable box may get (ChatGPT, Claude,
+    # Telegram Web): they count when their value is not read-only.
+    _TEXT_TYPES = frozenset({50003, 50020, 50025, 50026, 50033})
+    _TALL_LINES = 3             # a field this many lines high: follow the caret
 
     def __init__(self, browsers: Sequence[str] = BROWSERS,
-                 hosts: Sequence[str] = WEB_HOSTS) -> None:
+                 hosts: Sequence[str] = WEB_HOSTS,
+                 mode: Callable[[], str] = lambda: "all") -> None:
         super().__init__()
         from comtypes.gen import UIAutomationClient as uia_module
 
         self._value_interface = uia_module.IUIAutomationValuePattern
+        self._text_interface = uia_module.IUIAutomationTextPattern
         self._walker = self._uia.RawViewWalker
         self._browsers = frozenset(b.lower() for b in browsers)
         self._hosts = tuple(hosts)
+        self._mode = mode
         self._woken: set[int] = set()
         self._last: tuple[int, int, bool] = (0, 0, False)
 
@@ -256,23 +280,79 @@ class WebStrategy(UiaStrategy):
             if not focused or focused.CurrentProcessId != pid:
                 return self._foreign(hwnd)
             document = self._document(focused)
-            if document is None or not is_web_address(self._address(document), self._hosts):
+            if document is None:
+                return self._foreign(hwnd)          # the browser's own interface
+            telegram = is_web_address(self._address(document), self._hosts)
+            if not telegram and self._mode() != "all":
                 return self._foreign(hwnd)
-            if focused.CurrentControlType == self._DOCUMENT:
-                # Nothing focused on the page yet: Telegram Web puts the
-                # typing into its message field, the lowest one.
-                anchor = self._search(document)
+            if self._editable(focused):
+                anchor = self._field(focused)
+            elif telegram:
+                # Nothing typed into is focused: Telegram Web moves the typing
+                # into its message field, the lowest one.
+                anchor = self._search(document) or WindowStrategy().locate(hwnd)
             else:
-                anchor = self._anchor(focused, "web")
+                return self._foreign(hwnd)          # keys are shortcuts of the page
         except Exception:
             # COMError: the page changed between the calls. Unknown is foreign.
             return self._foreign(hwnd)
         if anchor is None:
-            anchor = WindowStrategy().locate(hwnd)
-        if anchor is None:
             return self._foreign(hwnd)
+        if anchor.source.startswith("web"):
+            return anchor
         return Anchor(anchor.left, anchor.top, anchor.right, anchor.bottom, "web",
                       anchor.is_password)
+
+    def _editable(self, element) -> bool:
+        kind = element.CurrentControlType
+        if kind == self._EDIT:
+            return True
+        if kind not in self._TEXT_TYPES:
+            return False
+        pattern = element.GetCurrentPattern(self._VALUE_PATTERN)
+        if not pattern:
+            return False
+        return not pattern.QueryInterface(self._value_interface).CurrentIsReadOnly
+
+    def _field(self, element) -> Optional[Anchor]:
+        """The field itself, or the caret line in a tall one (the big box of a
+        chat with an AI, a mail): above such a field could be far away."""
+        field = self._anchor(element, "web")
+        if field is None or field.is_password:
+            return field
+        caret = self._caret(element)
+        if caret is None:
+            return field
+        x, top, bottom = caret
+        if field.bottom - field.top <= self._TALL_LINES * (bottom - top):
+            return field
+        # From the caret to the right edge: placed above the caret, and the
+        # colour is sampled from the empty part of the line.
+        return Anchor(x, top, max(field.right, x + 1), bottom, "web-caret")
+
+    def _caret(self, element) -> Optional[tuple[int, int, int]]:
+        """(x, top, bottom) of the caret line, None if the browser does not say."""
+        try:
+            pattern = element.GetCurrentPattern(self._TEXT_PATTERN)
+            if not pattern:
+                return None
+            ranges = pattern.QueryInterface(self._text_interface).GetSelection()
+            if not ranges or ranges.Length == 0:
+                return None
+            caret = ranges.GetElement(0).Clone()
+            boxes = _boxes(caret.GetBoundingRectangles())
+            if boxes:
+                left, top, _, bottom = boxes[0]
+                return left, top, bottom
+            # A collapsed range has no box: measure the character before it
+            caret.MoveEndpointByUnit(self._START, self._CHARACTER, -1)
+            boxes = _boxes(caret.GetBoundingRectangles())
+            if not boxes:
+                return None
+            _, top, right, bottom = boxes[-1]
+            return right, top, bottom
+        except Exception:
+            return None
 
     def _wake(self, hwnd: int) -> None:
         """Chromium builds the page tree for UI Automation only once asked
@@ -324,9 +404,11 @@ class Locator(threading.Thread):
         on_result: Callable[[int, Optional[Anchor]], None],
         strategies: Optional[Sequence] = None,
         min_interval: float = 0.08,
+        browser_mode: Callable[[], str] = lambda: "all",
     ) -> None:
         super().__init__(name="locator", daemon=True)
         self._on_result = on_result
+        self._browser_mode = browser_mode
         self._strategies = strategies
         self._min_interval = min_interval
         self._event = threading.Event()
@@ -347,7 +429,7 @@ class Locator(threading.Thread):
         strategies: list = [CaretStrategy()]
         try:
             # Telegram Web first: in a browser its answer is final
-            strategies.insert(0, WebStrategy())
+            strategies.insert(0, WebStrategy(mode=self._browser_mode))
             strategies.append(UiaStrategy())
         except Exception:
             log.exception("UI Automation is not available; using window geometry only")
