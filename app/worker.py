@@ -26,6 +26,8 @@ _RESET_VKS = frozenset({
     w.VK_HOME, w.VK_END, w.VK_PRIOR, w.VK_NEXT, w.VK_DELETE, w.VK_INSERT,
     w.VK_APPS,
 })
+# After these keys a new word starts (or the caret went somewhere unknown).
+_WORD_END_VKS = _RESET_VKS | {w.VK_SPACE, w.VK_RETURN}
 _VK_C = 0x43
 _BULLET = "•"      # stands for one non-letter character (an emoji)
 
@@ -43,6 +45,7 @@ class EngineWorker(threading.Thread):
         on_update: Callable[[list, bool], None],
         on_word_start: Optional[Callable[[Optional[int]], None]] = None,
         on_diag: Optional[Callable[[dict], None]] = None,
+        needs_confirmation: Callable[[Optional[int]], bool] = lambda hwnd: False,
         idle_flush: float = 2.0,
         max_dirty: float = 15.0,
     ) -> None:
@@ -59,8 +62,13 @@ class EngineWorker(threading.Thread):
         self._idle_flush = idle_flush
         self._max_dirty = max_dirty
         self._q: queue.SimpleQueue = queue.SimpleQueue()
+        # A browser window: keys are ignored until the page is known to be
+        # Telegram Web (a "blocked" event for this window says so).
+        self._needs_confirmation = needs_confirmation
         self._paused = False
-        self._blocked = False       # focus is in a password field
+        # Focus is in a password field, or in a browser not on Telegram Web
+        self._blocked = False
+        self._mid_word = False      # the last key while blocked was inside a word
         self._active = False        # Telegram is in the foreground
         self._hwnd: Optional[int] = None
         self._last_texts: list = []
@@ -116,8 +124,12 @@ class EngineWorker(threading.Thread):
             if self._paused:
                 return
             if self._blocked:
-                if event[1] in (w.VK_TAB, w.VK_RETURN, w.VK_ESCAPE) and self._on_word_start:
-                    self._on_word_start(event[9])      # maybe the password field was left
+                self._set_focus(True, event[9])
+                self._mid_word = event[1] not in _WORD_END_VKS
+                if self._on_word_start:
+                    # Maybe the password field was left, or the browser now
+                    # shows Telegram Web. The locator skips repeated requests.
+                    self._on_word_start(event[9])
                 return
             self._set_focus(True, event[9])
             self._on_key(event)
@@ -125,6 +137,7 @@ class EngineWorker(threading.Thread):
             if not self._paused and not self._blocked:
                 self._accept(event[1])
         elif kind == "reset":
+            self._mid_word = False
             self.engine.reset()
         elif kind == "focus":
             self._set_focus(bool(event[1]), event[2] if len(event) > 2 else None)
@@ -132,10 +145,10 @@ class EngineWorker(threading.Thread):
             self._paused = bool(event[1])
             self.engine.reset()
         elif kind == "blocked":
-            flag = bool(event[1])
-            if flag and not self._blocked:
-                self.engine.discard()
-            self._blocked = flag
+            hwnd = event[2] if len(event) > 2 else None
+            if hwnd is not None and (not self._active or hwnd != self._hwnd):
+                return                  # a late answer about a window left since
+            self._set_blocked(bool(event[1]))
         elif kind == "forget":
             if not self._paused and not self._blocked:
                 self.engine.forget(event[1])
@@ -159,7 +172,21 @@ class EngineWorker(threading.Thread):
             return
         self._active = active
         self._hwnd = hwnd
+        self._mid_word = False
         self.engine.reset()
+        if active and self._needs_confirmation(hwnd):
+            self._set_blocked(True)
+            if self._on_word_start:
+                self._on_word_start(hwnd)
+
+    def _set_blocked(self, flag: bool) -> None:
+        if flag and not self._blocked:
+            self.engine.discard()
+        elif not flag and self._blocked and self._mid_word:
+            # Unblocked in the middle of a word: its start was not seen.
+            self.engine.skip_word()
+        self._mid_word = False
+        self._blocked = flag
 
     def _on_key(self, event: tuple) -> None:
         _, vk, scan, shift, ctrl, alt, win, caps, action, hwnd = event
