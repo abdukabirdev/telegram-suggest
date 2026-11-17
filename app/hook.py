@@ -63,7 +63,6 @@ class KeyboardHook(threading.Thread):
         self.installed = threading.Event()
         self.hotkey_ok = False
 
-        self._fg: Optional[int] = None
         self._active = False
         self._caps = False
         self._caps_held = False
@@ -165,13 +164,13 @@ class KeyboardHook(threading.Thread):
         if self.paused or vk in _MODIFIER_VKS:
             return False
 
+        # Asked on every key: a browser keeps its window when the tab changes.
+        # The answer is cached per window, only a browser title is read again.
         hwnd = self._foreground()
-        if hwnd != self._fg:
-            self._fg = hwnd
-            active = self._is_target(hwnd)
-            if active != self._active:
-                self._active = active
-                self._sink(("focus", active, hwnd))
+        active = self._is_target(hwnd)
+        if active != self._active:
+            self._active = active
+            self._sink(("focus", active, hwnd))
         if not self._active:
             return False
 
