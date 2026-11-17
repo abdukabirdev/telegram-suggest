@@ -420,12 +420,15 @@ class Lexicon:
             now = self._clock()
         min_count = max(int(self.settings.next_word_min_count), 1)
         result: list[Suggestion] = []
+        key = nfc(prev).lower()
         with self._lock:
-            followers = self._bigrams.get(nfc(prev).lower())
+            followers = self._bigrams.get(key)
             if not followers:
                 return []
             for nxt, rec in followers.items():
-                if rec[0] < min_count:
+                # Never the same word again: "привет" -> "привет" would feed
+                # on itself, every Tab making the pair stronger.
+                if rec[0] < min_count or nxt == key:
                     continue
                 entry = self._words.get(nxt)
                 if entry is None or not entry.indexed:
