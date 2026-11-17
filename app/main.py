@@ -89,14 +89,15 @@ class Application(QObject):
         self.bridge = Bridge()
         self.overlay = Overlay(settings.theme, settings.key_hints)
         self.tray = Tray(self)
-        self.watch = WindowWatch(web=settings.web)
+        self.watch = WindowWatch(browser=settings.browser)
         self._fallback = WindowStrategy()
 
         # one per thread: the cache inside is not shared
-        hook_watch = WindowWatch(web=settings.web)
-        worker_watch = WindowWatch(web=settings.web)
+        hook_watch = WindowWatch(browser=settings.browser)
+        worker_watch = WindowWatch(browser=settings.browser)
         self._watches = (self.watch, hook_watch, worker_watch)
-        self.locator = Locator(self.bridge.anchor.emit)
+        self.locator = Locator(self.bridge.anchor.emit,
+                               browser_mode=lambda: self.settings.browser)
         self.hook = KeyboardHook(
             sink=self._sink,
             is_target=hook_watch.is_target,
@@ -259,9 +260,10 @@ class Application(QObject):
                 self._reposition()
         elif name == "autostart":
             self._apply_autostart(self.settings.autostart)
-        elif name == "web":
+        elif name == "browser":
             for watch in self._watches:
-                watch.web = self.settings.web       # the poll timer does the rest
+                watch.browser = self.settings.browser   # the poll timer does the rest
+            self.locator.request(self._target_hwnd)
 
     def _on_words_changed(self) -> None:
         self.worker.post("refresh")
@@ -401,9 +403,9 @@ class Application(QObject):
         self._anchor = anchor
         self._anchor_hwnd = hwnd
         password = bool(anchor is not None and anchor.is_password)
-        # In a browser only a field found on a Telegram Web page unblocks
+        # In a browser only a text field found on a page unblocks
         foreign = self.watch.is_browser(hwnd) and (
-            anchor is None or anchor.foreign or anchor.source != "web")
+            anchor is None or anchor.foreign or not anchor.source.startswith("web"))
         self._blocked = password or foreign
         # Posted every time: the worker blocks a browser on its own until told
         self.worker.post("blocked", self._blocked, hwnd)
@@ -524,7 +526,7 @@ class Application(QObject):
         if state.get("paused"):
             parts.append("ПАУЗА")
         if state.get("foreign"):
-            parts.append("НЕ TELEGRAM WEB (ничего не читаем)")
+            parts.append("НЕ ПОЛЕ ДЛЯ ТЕКСТА (ничего не читаем)")
         elif state.get("password") or state.get("blocked"):
             parts.append("ПОЛЕ ПАРОЛЯ (ничего не читаем)")
         self._print(" | ".join(parts))
