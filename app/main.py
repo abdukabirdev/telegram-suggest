@@ -57,12 +57,13 @@ _MUTEX_NAME = "Local\\TelegramSuggest.SingleInstance"
 # Settings whose change needs the dictionary index rebuilt / only new suggestions
 _RANKING = frozenset({"min_suggest_len", "half_life_days", "bigram_weight", "min_word_len"})
 _SUGGESTING = frozenset({"max_suggestions", "min_prefix_len", "next_word",
+                         "next_word_min_count",
                          "cross_script", "cross_script_penalty"})
 
 
 class Bridge(QObject):
     """Carries events from the background threads into the Qt thread."""
-    suggestions = Signal(object)
+    suggestions = Signal(object, bool)     # words; are they next words
     anchor = Signal(object, object)
     pause_hotkey = Signal()
     diag = Signal(object)
@@ -379,13 +380,13 @@ class Application(QObject):
                 return None
         return field
 
-    def _on_suggestions(self, texts: list) -> None:
+    def _on_suggestions(self, texts: list, next_words: bool = False) -> None:
         if texts and not self._active:
             self._poll()            # typing started before the timer noticed Telegram
         if not texts or self._paused or not self._active:
             self.overlay.hide()
             return
-        self.overlay.set_items(texts)
+        self.overlay.set_items(texts, next_words)
         self._reposition()
 
     def _on_anchor(self, hwnd, anchor) -> None:

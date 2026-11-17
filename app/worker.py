@@ -40,7 +40,7 @@ class EngineWorker(threading.Thread):
         insert: Callable[[int, str], bool],
         foreground_is_target: Callable[[], bool],
         set_visible: Callable[[int], None],
-        on_update: Callable[[list], None],
+        on_update: Callable[[list, bool], None],
         on_word_start: Optional[Callable[[Optional[int]], None]] = None,
         on_diag: Optional[Callable[[dict], None]] = None,
         idle_flush: float = 2.0,
@@ -64,6 +64,7 @@ class EngineWorker(threading.Thread):
         self._active = False        # Telegram is in the foreground
         self._hwnd: Optional[int] = None
         self._last_texts: list = []
+        self._last_next = False
         self._last_flush = time.monotonic()
 
     # ---- called from other threads -----------------------------------------
@@ -216,12 +217,15 @@ class EngineWorker(threading.Thread):
     def _publish(self) -> None:
         if self._paused or self._blocked or not self._active:
             texts: list = []
+            next_words = False
         else:
             texts = [s.text for s in self.engine.suggestions()]
+            next_words = self.engine.predicting
         self._set_visible(len(texts))
-        if texts != self._last_texts:
+        if texts != self._last_texts or next_words != self._last_next:
             self._last_texts = texts
-            self._on_update(texts)
+            self._last_next = next_words
+            self._on_update(texts, next_words)
         if self._on_diag is not None:
             self._on_diag(self.snapshot(texts))
 
