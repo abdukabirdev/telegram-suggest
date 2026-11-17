@@ -158,3 +158,12 @@ def test_switches_behave_like_check_boxes(window):
     switch.click()
     assert not switch.isChecked() and not window.settings.autostart
     assert switch.heightForWidth(200) >= switch.heightForWidth(2000)
+
+
+def test_telegram_web_switch(window, store):
+    window.show_page("suggest")
+    assert window._web.isChecked() and window.settings.web
+    window._web.click()
+    assert window.settings.web is False
+    assert store.get_setting("web") is False
+    assert window.changes[-1] == "web"
