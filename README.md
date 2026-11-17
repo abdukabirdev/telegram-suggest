@@ -1,6 +1,7 @@
 # Telegram Suggest
 
-Phone-keyboard-style word suggestions for **Telegram Desktop** on Windows 10/11.
+Phone-keyboard-style word suggestions for **Telegram Desktop** on Windows 10/11
+(also AyuGram, Kotatogram, 64Gram, and Telegram Web in a browser).
 It learns from what you type and offers the most likely words after one or two letters,
 and right after a space the word you usually type next («ассалому» → «алайкум»).
 
@@ -36,6 +37,9 @@ To get useful suggestions from day one, import a Telegram chat export
 ## Privacy
 
 - Keys are read only while Telegram is the active window, never in password fields.
+- In a browser, only on web.telegram.org: the tab title must mention Telegram and the
+  page address is checked through UI Automation; other sites and the address bar are ignored.
+  Can be turned off in the settings.
 - Logs contain technical events only, no typed text.
 - For the theme, one background colour of Telegram's message field is computed every
   couple of seconds; the pixels are discarded at once.
@@ -58,8 +62,9 @@ build.bat                                  # tests + dist\TelegramSuggest.exe
 | Module | Role |
 |---|---|
 | `hook.py`, `keymap.py` | low-level keyboard hook, keys → characters for the active layout |
+| `window_watch.py` | is the foreground window Telegram (Desktop, a fork, or a Telegram Web tab) |
 | `engine.py`, `lexicon.py`, `store.py` | word buffer, ranking with time decay and bigrams, SQLite |
-| `positioning.py` | finds Telegram's input field via UI Automation |
+| `positioning.py` | finds Telegram's input field via UI Automation, checks the page address in browsers |
 | `overlay.py`, `theme.py` | non-activating suggestion window, colours sampled from Telegram |
 | `inserter.py` | types the chosen word with a single `SendInput` |
 | `importer.py` | learns from Telegram exports |
