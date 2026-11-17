@@ -37,6 +37,7 @@ class Rig:
     def __init__(self, lexicon, settings):
         self.inserted = []
         self.updates = []
+        self.next_words = False
         self.visible = 0
         self.word_starts = []
         self.diag = []
@@ -48,10 +49,14 @@ class Rig:
             insert=self._insert,
             foreground_is_target=lambda: self.foreground_ok,
             set_visible=self._set_visible,
-            on_update=self.updates.append,
+            on_update=self._update,
             on_word_start=self.word_starts.append,
             on_diag=self.diag.append,
         )
+
+    def _update(self, texts, next_words):
+        self.updates.append(texts)
+        self.next_words = next_words
 
     def _insert(self, backspaces, text):
         self.inserted.append((backspaces, text))
@@ -128,6 +133,20 @@ def test_failed_insert_is_not_learned(rig, lexicon):
     rig.key(w.VK_TAB, action=("accept", 0))
     rig.type(" д")
     assert lexicon.get("салом").freq == 1
+
+
+def test_next_words_are_flagged_for_the_window(rig, lexicon):
+    rig.type("салом ака\nсалом ака\n")
+    rig.type("салом ")
+    assert rig.shown == ["ака"]
+    assert rig.next_words is True
+    rig.type("а")
+    assert rig.shown == ["ака"]                 # same word, now a completion
+    assert rig.next_words is False
+    rig.type("\b")
+    rig.worker.process(("forget", 0))           # only the pair goes
+    assert rig.shown == []
+    assert "ака" in lexicon
 
 
 def test_forget_deletes_the_shown_word(rig, lexicon):

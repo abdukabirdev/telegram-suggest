@@ -131,6 +131,7 @@ def test_right_click_asks_then_left_click_deletes(overlay):
     assert overlay.confirming() == 2
     assert overlay.width() > width                  # the chip now asks the question
     assert confirm_text("ака") == "Удалить «ака»?"
+    assert confirm_text("ака", next_word=True) == "Не предлагать «ака» тут?"
     assert deleted == [] and clicked == []
     _click(overlay, _centers(overlay)[2])
     assert deleted == [2] and clicked == []
