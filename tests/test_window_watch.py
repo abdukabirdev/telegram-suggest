@@ -28,7 +28,7 @@ def test_foreground_check_returns_a_pair():
 
 
 def test_target_matching_is_case_insensitive_and_cached(monkeypatch):
-    names = {11: "telegram.exe", 22: "chrome.exe"}
+    names = {11: "telegram.exe", 22: "notepad.exe"}
     pids = {0x100: 11, 0x200: 22}
     lookups = []
 
@@ -74,10 +74,18 @@ def _fake_windows(monkeypatch, names, titles):
     monkeypatch.setattr(window_watch, "window_title", lambda hwnd: titles.get(hwnd, ""))
 
 
+def test_every_browser_window_counts_on_all_sites(monkeypatch):
+    _fake_windows(monkeypatch, {1: "chrome.exe", 2: "notepad.exe"},
+                  {1: "ChatGPT - Google Chrome", 2: "Telegram - Notepad"})
+    watch = WindowWatch()
+    assert watch.is_target(1) and watch.is_browser(1)
+    assert not watch.is_target(2) and not watch.is_browser(2)
+
+
 def test_browser_counts_only_with_telegram_in_its_title(monkeypatch):
     titles = {1: "Telegram Web - Google Chrome", 2: "(3) Telegram Web — Mozilla Firefox"}
     _fake_windows(monkeypatch, {1: "chrome.exe", 2: "firefox.exe", 3: "telegram.exe"}, titles)
-    watch = WindowWatch()
+    watch = WindowWatch(browser="telegram")
     assert watch.is_target(1) and watch.is_target(2)
     assert watch.is_browser(1) and not watch.is_browser(3)
     titles[1] = "YouTube - Google Chrome"          # another tab, same window
@@ -85,13 +93,13 @@ def test_browser_counts_only_with_telegram_in_its_title(monkeypatch):
     assert watch.kind(1) == "browser" and watch.kind(3) == "app" and watch.kind(4) == ""
 
 
-def test_telegram_web_can_be_turned_off(monkeypatch):
+def test_browsers_can_be_turned_off(monkeypatch):
     _fake_windows(monkeypatch, {1: "msedge.exe", 3: "telegram.exe"},
                   {1: "Telegram Web - Microsoft Edge"})
-    watch = WindowWatch(web=False)
+    watch = WindowWatch(browser="off")
     assert watch.is_target(1) is False and watch.is_browser(1) is False
     assert watch.is_target(3) is True
-    watch.web = True
+    watch.browser = "all"
     assert watch.is_target(1) is True
 
 
