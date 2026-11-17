@@ -47,6 +47,10 @@ class Settings:
     # Small key numbers on the words: "ctrl" while Ctrl is held | "always" | "never"
     key_hints: str = "ctrl"
 
+    # Where: Telegram Desktop (and forks) always; Telegram Web in a browser
+    # when this is on (only on its own pages, see app.positioning.WebStrategy)
+    web: bool = True
+
     # Program
     autostart: bool = False
     welcome_shown: bool = False
