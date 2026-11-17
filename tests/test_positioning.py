@@ -1,7 +1,11 @@
 import threading
+from types import SimpleNamespace
 
-from app.positioning import (Anchor, CaretStrategy, Locator, WindowStrategy,
-                             guess_anchor, monitor_work_area, place)
+import pytest
+
+from app import positioning
+from app.positioning import (Anchor, CaretStrategy, Locator, WebStrategy, WindowStrategy,
+                             guess_anchor, is_web_address, monitor_work_area, place)
 
 WORK = (0, 0, 1920, 1040)
 FIELD = Anchor(475, 1003, 1830, 1031, "uia-focus")
@@ -131,3 +135,114 @@ def test_locator_ignores_empty_window_handle():
     locator.request(0)
     locator.request(None)
     assert not locator._event.is_set()
+
+
+# ---- Telegram Web in a browser -----------------------------------------------
+
+BROWSER_PID = 77
+
+
+def test_web_address_check():
+    assert is_web_address("https://web.telegram.org/k/#@durov")
+    assert is_web_address("https://web.telegram.org/a/")
+    assert is_web_address("https://webk.telegram.org/")
+    assert not is_web_address("http://web.telegram.org/k/")
+    assert not is_web_address("https://telegram.org/")
+    assert not is_web_address("https://web.telegram.org.evil.com/")
+    assert not is_web_address("https://www.google.com/search?q=web.telegram.org")
+    assert not is_web_address("")
+
+
+class _Element:
+    def __init__(self, kind, rect=(0, 0, 10, 10), parent=None, value=None,
+                 pid=BROWSER_PID, password=False):
+        self.CurrentControlType = kind
+        left, top, right, bottom = rect
+        self.CurrentBoundingRectangle = SimpleNamespace(left=left, top=top, right=right,
+                                                        bottom=bottom)
+        self.CurrentIsPassword = password
+        self.CurrentProcessId = pid
+        self.CurrentIsOffscreen = False
+        self.CurrentHasKeyboardFocus = False
+        self.parent = parent
+        self.value = value
+        self.children = []
+
+    def GetCurrentPattern(self, pattern_id):
+        if self.value is None:
+            return None
+        return SimpleNamespace(QueryInterface=lambda iface: SimpleNamespace(
+            CurrentValue=self.value))
+
+    def FindAll(self, scope, condition):
+        found = [c for c in self.children if c.CurrentControlType == WebStrategy._EDIT]
+        return SimpleNamespace(Length=len(found), GetElement=found.__getitem__)
+
+
+def _web_strategy(monkeypatch, focused, name="chrome.exe"):
+    monkeypatch.setattr(positioning, "window_ids", lambda hwnd: (1, BROWSER_PID))
+    monkeypatch.setattr(positioning, "process_name", lambda pid: name)
+    monkeypatch.setattr(positioning, "window_rect", lambda hwnd: (0, 0, 1920, 1040))
+    strategy = WebStrategy.__new__(WebStrategy)
+    strategy._browsers = frozenset(positioning.BROWSERS)
+    strategy._hosts = positioning.WEB_HOSTS
+    strategy._woken = {0x10}
+    strategy._last = (0, 0, False)
+    strategy._value_interface = None
+
+    def get_focused():
+        if isinstance(focused, Exception):
+            raise focused
+        return focused
+
+    strategy._uia = SimpleNamespace(GetFocusedElement=get_focused)
+    strategy._walker = SimpleNamespace(GetParentElement=lambda element: element.parent)
+    strategy._edit_condition = None
+    return strategy
+
+
+def _page(url):
+    window = _Element(50032)
+    return _Element(WebStrategy._DOCUMENT, (0, 80, 1920, 1040), window, url)
+
+
+def test_web_field_on_telegram_web_is_used(monkeypatch):
+    box = _Element(50026, parent=_page("https://web.telegram.org/k/"))
+    field = _Element(WebStrategy._EDIT, (500, 980, 1800, 1020), box)
+    anchor = _web_strategy(monkeypatch, field).locate(0x10)
+    assert anchor == Anchor(500, 980, 1800, 1020, "web")
+
+
+def test_web_password_field_is_reported(monkeypatch):
+    field = _Element(WebStrategy._EDIT, (500, 500, 900, 530),
+                     _page("https://web.telegram.org/a/"), password=True)
+    anchor = _web_strategy(monkeypatch, field).locate(0x10)
+    assert anchor.is_password and not anchor.foreign
+
+
+@pytest.mark.parametrize("case", ["other site", "address bar", "other process", "error",
+                                  "nothing"])
+def test_web_anything_else_is_foreign(monkeypatch, case):
+    focused = {
+        "other site": _Element(WebStrategy._EDIT, parent=_page("https://mail.google.com/")),
+        "address bar": _Element(WebStrategy._EDIT, parent=_Element(50033, value="")),
+        "other process": _Element(WebStrategy._EDIT, pid=5,
+                                  parent=_page("https://web.telegram.org/k/")),
+        "error": RuntimeError("COM"),
+        "nothing": None,
+    }[case]
+    anchor = _web_strategy(monkeypatch, focused).locate(0x10)
+    assert anchor is not None and anchor.foreign and anchor.source == "web"
+
+
+def test_web_page_without_focused_field_uses_its_lowest_field(monkeypatch):
+    page = _page("https://web.telegram.org/k/")
+    page.children = [_Element(WebStrategy._EDIT, (100, 90, 400, 120)),
+                     _Element(WebStrategy._EDIT, (500, 980, 1800, 1020))]
+    anchor = _web_strategy(monkeypatch, page).locate(0x10)
+    assert (anchor.left, anchor.top, anchor.source, anchor.foreign) == (500, 980, "web", False)
+
+
+def test_web_strategy_leaves_other_programs_alone(monkeypatch):
+    strategy = _web_strategy(monkeypatch, None, name="telegram.exe")
+    assert strategy.locate(0x10) is None
