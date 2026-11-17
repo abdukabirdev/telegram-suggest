@@ -225,3 +225,18 @@ def test_live_hook_sees_foreign_keys_and_skips_our_own():
         hook.stop()
         hook.join(3.0)
     assert not hook.is_alive()
+
+
+def test_target_is_asked_on_every_key_for_browser_tabs():
+    events = []
+    targets = {TG: True}
+    hook = KeyboardHook(sink=events.append, is_target=lambda hwnd: targets.get(hwnd, False),
+                        foreground=lambda: TG, key_down=lambda vk: False)
+    hook.handle(VK_A, 0, True)
+    targets[TG] = False                     # same window, the tab is another site now
+    assert hook.handle(VK_A, 0, True) is False
+    targets[TG] = True
+    hook.handle(VK_A, 0, True)
+    focus = [e for e in events if e[0] == "focus"]
+    assert focus == [("focus", True, TG), ("focus", False, TG), ("focus", True, TG)]
+    assert len([e for e in events if e[0] == "key"]) == 2
