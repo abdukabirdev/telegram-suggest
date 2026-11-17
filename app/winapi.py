@@ -240,6 +240,12 @@ GetClientRect = _proto(user32.GetClientRect, wintypes.BOOL,
 ClientToScreen = _proto(user32.ClientToScreen, wintypes.BOOL,
                         wintypes.HWND, ctypes.POINTER(wintypes.POINT))
 IsWindow = _proto(user32.IsWindow, wintypes.BOOL, wintypes.HWND)
+# For a window of another process GetWindowTextW reads the stored caption
+# without sending it a message, so it cannot hang on a busy program.
+GetWindowTextW = _proto(user32.GetWindowTextW, ctypes.c_int,
+                        wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+FindWindowExW = _proto(user32.FindWindowExW, wintypes.HWND,
+                       wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR)
 IsIconic = _proto(user32.IsIconic, wintypes.BOOL, wintypes.HWND)
 GetGUIThreadInfo = _proto(user32.GetGUIThreadInfo, wintypes.BOOL,
                           wintypes.DWORD, ctypes.POINTER(GUITHREADINFO))
