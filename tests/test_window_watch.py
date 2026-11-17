@@ -66,3 +66,36 @@ def test_reused_window_handle_is_rechecked(monkeypatch):
     assert watch.is_target(0x100) is True
     pids[0x100] = 33                          # same handle value, another process now
     assert watch.is_target(0x100) is False
+
+
+def _fake_windows(monkeypatch, names, titles):
+    monkeypatch.setattr(window_watch, "window_ids", lambda hwnd: (1, hwnd))
+    monkeypatch.setattr(window_watch, "process_name", lambda pid: names.get(pid, ""))
+    monkeypatch.setattr(window_watch, "window_title", lambda hwnd: titles.get(hwnd, ""))
+
+
+def test_browser_counts_only_with_telegram_in_its_title(monkeypatch):
+    titles = {1: "Telegram Web - Google Chrome", 2: "(3) Telegram Web — Mozilla Firefox"}
+    _fake_windows(monkeypatch, {1: "chrome.exe", 2: "firefox.exe", 3: "telegram.exe"}, titles)
+    watch = WindowWatch()
+    assert watch.is_target(1) and watch.is_target(2)
+    assert watch.is_browser(1) and not watch.is_browser(3)
+    titles[1] = "YouTube - Google Chrome"          # another tab, same window
+    assert watch.is_target(1) is False
+    assert watch.kind(1) == "browser" and watch.kind(3) == "app" and watch.kind(4) == ""
+
+
+def test_telegram_web_can_be_turned_off(monkeypatch):
+    _fake_windows(monkeypatch, {1: "msedge.exe", 3: "telegram.exe"},
+                  {1: "Telegram Web - Microsoft Edge"})
+    watch = WindowWatch(web=False)
+    assert watch.is_target(1) is False and watch.is_browser(1) is False
+    assert watch.is_target(3) is True
+    watch.web = True
+    assert watch.is_target(1) is True
+
+
+def test_window_title_of_missing_window():
+    assert window_watch.window_title(0) == ""
+    assert window_watch.window_title(0x7FFFFFF0) == ""
+    assert window_watch.is_web_title("Telegram Web") and not window_watch.is_web_title("Почта")
