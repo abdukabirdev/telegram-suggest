@@ -5,7 +5,7 @@ import pytest
 
 from app import positioning
 from app.positioning import (Anchor, CaretStrategy, Locator, WebStrategy, WindowStrategy,
-                             guess_anchor, is_web_address, monitor_work_area, place)
+                             _boxes, guess_anchor, is_web_address, monitor_work_area, place)
 
 WORK = (0, 0, 1920, 1040)
 FIELD = Anchor(475, 1003, 1830, 1031, "uia-focus")
@@ -153,9 +153,24 @@ def test_web_address_check():
     assert not is_web_address("")
 
 
+class _Range:
+    def __init__(self, boxes, before=None):
+        self.boxes = boxes              # flat x, y, width, height numbers
+        self.before = before            # boxes after moving the start one back
+
+    def Clone(self):
+        return _Range(self.boxes, self.before)
+
+    def GetBoundingRectangles(self):
+        return self.boxes
+
+    def MoveEndpointByUnit(self, endpoint, unit, count):
+        self.boxes = self.before
+
+
 class _Element:
     def __init__(self, kind, rect=(0, 0, 10, 10), parent=None, value=None,
-                 pid=BROWSER_PID, password=False):
+                 pid=BROWSER_PID, password=False, read_only=True, caret=None):
         self.CurrentControlType = kind
         left, top, right, bottom = rect
         self.CurrentBoundingRectangle = SimpleNamespace(left=left, top=top, right=right,
@@ -166,20 +181,28 @@ class _Element:
         self.CurrentHasKeyboardFocus = False
         self.parent = parent
         self.value = value
+        self.read_only = read_only
+        self.caret = caret
         self.children = []
 
     def GetCurrentPattern(self, pattern_id):
+        if pattern_id == WebStrategy._TEXT_PATTERN:
+            if self.caret is None:
+                return None
+            selection = SimpleNamespace(Length=1, GetElement=lambda i: self.caret)
+            return SimpleNamespace(QueryInterface=lambda iface: SimpleNamespace(
+                GetSelection=lambda: selection))
         if self.value is None:
             return None
         return SimpleNamespace(QueryInterface=lambda iface: SimpleNamespace(
-            CurrentValue=self.value))
+            CurrentValue=self.value, CurrentIsReadOnly=self.read_only))
 
     def FindAll(self, scope, condition):
         found = [c for c in self.children if c.CurrentControlType == WebStrategy._EDIT]
         return SimpleNamespace(Length=len(found), GetElement=found.__getitem__)
 
 
-def _web_strategy(monkeypatch, focused, name="chrome.exe"):
+def _web_strategy(monkeypatch, focused, name="chrome.exe", mode="all"):
     monkeypatch.setattr(positioning, "window_ids", lambda hwnd: (1, BROWSER_PID))
     monkeypatch.setattr(positioning, "process_name", lambda pid: name)
     monkeypatch.setattr(positioning, "window_rect", lambda hwnd: (0, 0, 1920, 1040))
@@ -189,6 +212,8 @@ def _web_strategy(monkeypatch, focused, name="chrome.exe"):
     strategy._woken = {0x10}
     strategy._last = (0, 0, False)
     strategy._value_interface = None
+    strategy._text_interface = None
+    strategy._mode = lambda: mode
 
     def get_focused():
         if isinstance(focused, Exception):
@@ -220,11 +245,49 @@ def test_web_password_field_is_reported(monkeypatch):
     assert anchor.is_password and not anchor.foreign
 
 
-@pytest.mark.parametrize("case", ["other site", "address bar", "other process", "error",
-                                  "nothing"])
+def test_web_field_on_any_site(monkeypatch):
+    field = _Element(WebStrategy._EDIT, (300, 600, 1200, 640), _page("https://chatgpt.com/"))
+    assert _web_strategy(monkeypatch, field).locate(0x10) == Anchor(300, 600, 1200, 640, "web")
+
+
+def test_web_contenteditable_box_counts_when_not_read_only(monkeypatch):
+    page = _page("https://claude.ai/new")
+    box = _Element(50026, (300, 600, 1200, 640), page, value="", read_only=False)
+    assert _web_strategy(monkeypatch, box).locate(0x10).foreign is False
+    plain = _Element(50026, (300, 600, 1200, 640), page, value="", read_only=True)
+    assert _web_strategy(monkeypatch, plain).locate(0x10).foreign is True
+
+
+def test_web_tall_field_follows_the_caret(monkeypatch):
+    page = _page("https://mail.google.com/")
+    typing = _Range((), before=(400, 520, 9, 20, 409, 520, 8, 20))
+    field = _Element(WebStrategy._EDIT, (300, 200, 1200, 900), page, caret=typing)
+    assert _web_strategy(monkeypatch, field).locate(0x10) == Anchor(417, 520, 1200, 540,
+                                                                   "web-caret")
+    short = _Element(WebStrategy._EDIT, (300, 500, 1200, 545), page, caret=typing)
+    assert _web_strategy(monkeypatch, short).locate(0x10).source == "web"
+    empty = _Element(WebStrategy._EDIT, (300, 200, 1200, 900), page, caret=_Range((), ()))
+    assert _web_strategy(monkeypatch, empty).locate(0x10).source == "web"
+
+
+def test_flat_rectangles_become_boxes():
+    assert _boxes((1.4, 2, 3, 4, 10, 10, 0, 0)) == [(1, 2, 4, 6)]
+    assert _boxes(None) == [] and _boxes((1, 2, 3)) == []
+
+
+def test_web_other_site_is_foreign_in_telegram_mode(monkeypatch):
+    field = _Element(WebStrategy._EDIT, parent=_page("https://mail.google.com/"))
+    assert _web_strategy(monkeypatch, field, mode="telegram").locate(0x10).foreign
+    field = _Element(WebStrategy._EDIT, parent=_page("https://web.telegram.org/k/"))
+    assert not _web_strategy(monkeypatch, field, mode="telegram").locate(0x10).foreign
+
+
+@pytest.mark.parametrize("case", ["button", "page itself", "address bar", "other process",
+                                  "error", "nothing"])
 def test_web_anything_else_is_foreign(monkeypatch, case):
     focused = {
-        "other site": _Element(WebStrategy._EDIT, parent=_page("https://mail.google.com/")),
+        "button": _Element(50000, parent=_page("https://www.youtube.com/")),
+        "page itself": _page("https://www.youtube.com/watch"),
         "address bar": _Element(WebStrategy._EDIT, parent=_Element(50033, value="")),
         "other process": _Element(WebStrategy._EDIT, pid=5,
                                   parent=_page("https://web.telegram.org/k/")),
