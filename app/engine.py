@@ -111,6 +111,15 @@ class Engine:
         self._after = ""
         self.reset()
 
+    def skip_word(self) -> None:
+        """Typing goes on in the middle of a word whose start was not seen:
+        learn nothing and suggest nothing until the next space or Enter."""
+        self.discard()
+        self._prev = None
+        self._sentence_start = False
+        self._tainted = True
+        self._taint_len = 1
+
     def dismiss(self) -> None:
         """Esc: hide suggestions until the next word."""
         self._shown = None
