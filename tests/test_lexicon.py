@@ -288,6 +288,14 @@ def test_predict_next(lexicon):
     assert texts(lexicon.predict_next("салом")) == ["алейкум", "ака", "дўстим"]
 
 
+def test_predict_next_never_offers_the_same_word(lexicon):
+    lexicon.learn("Привет")
+    for _ in range(5):
+        lexicon.learn("привет", prev="привет")
+        lexicon.learn("друг", prev="привет")
+    assert texts(lexicon.predict_next("Привет")) == ["друг"]
+
+
 def test_delete_pair_keeps_both_words(lexicon, store):
     for _ in range(2):
         lexicon.learn("салом")

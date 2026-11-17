@@ -431,3 +431,10 @@ def test_predicting_is_false_without_suggestions(engine):
 def test_feed_accepts_strings(engine, lexicon):
     engine.feed("салом дўстим\r")
     assert len(lexicon) == 2
+
+
+def test_accepted_word_does_not_come_back_as_its_own_next_word(engine):
+    type_keys(engine, "привет привет\nпривет привет\n")
+    type_keys(engine, "пр")
+    engine.accept(0)
+    assert engine.suggestions() == []
