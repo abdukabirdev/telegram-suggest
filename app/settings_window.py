@@ -345,11 +345,20 @@ class SettingsWindow(QWidget):
         box.addWidget(label("Где подсказывать", "section"))
         box.addWidget(label("Telegram Desktop и его версии (AyuGram, Kotatogram, 64Gram) — "
                             "всегда.", "hint"))
-        self._web = self._check(
-            "web", "Telegram Web в браузере (Chrome, Edge, Яндекс, Firefox, Opera)")
-        box.addWidget(self._web)
-        box.addWidget(label("Только на сайте web.telegram.org: на других сайтах и в адресной "
-                            "строке программа ничего не читает.", "hint"))
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        row.addWidget(label("В браузере", wrap=False))
+        self._browser = self._combo("browser", [
+            ("all", "На всех сайтах"),
+            ("telegram", "Только в Telegram Web"),
+            ("off", "Нигде"),
+        ])
+        row.addWidget(self._browser)
+        row.addStretch(1)
+        box.addLayout(row)
+        box.addWidget(label("Chrome, Edge, Яндекс, Firefox, Opera. Только в полях для текста: "
+                            "в адресной строке и в полях паролей программа ничего не читает.",
+                            "hint"))
         layout.addWidget(frame)
 
         frame, box = card()
