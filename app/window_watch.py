@@ -8,7 +8,8 @@ from typing import Iterable, Optional
 
 from . import winapi as w
 
-DEFAULT_TARGETS = ("telegram.exe",)
+# Telegram Desktop and its forks: same Qt text field, same theme colours
+DEFAULT_TARGETS = ("telegram.exe", "ayugram.exe", "kotatogram.exe", "64gram.exe")
 
 
 def window_ids(hwnd: Optional[int]) -> tuple[int, int]:
