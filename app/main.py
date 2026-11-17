@@ -89,11 +89,13 @@ class Application(QObject):
         self.bridge = Bridge()
         self.overlay = Overlay(settings.theme, settings.key_hints)
         self.tray = Tray(self)
-        self.watch = WindowWatch()
+        self.watch = WindowWatch(web=settings.web)
         self._fallback = WindowStrategy()
 
-        hook_watch = WindowWatch()
-        worker_watch = WindowWatch()
+        # one per thread: the cache inside is not shared
+        hook_watch = WindowWatch(web=settings.web)
+        worker_watch = WindowWatch(web=settings.web)
+        self._watches = (self.watch, hook_watch, worker_watch)
         self.locator = Locator(self.bridge.anchor.emit)
         self.hook = KeyboardHook(
             sink=self._sink,
@@ -110,6 +112,7 @@ class Application(QObject):
             on_update=self.bridge.suggestions.emit,
             on_word_start=self.locator.request,
             on_diag=self.bridge.diag.emit if diag else None,
+            needs_confirmation=worker_watch.is_browser,
         )
 
         self._paused = False
@@ -256,6 +259,9 @@ class Application(QObject):
                 self._reposition()
         elif name == "autostart":
             self._apply_autostart(self.settings.autostart)
+        elif name == "web":
+            for watch in self._watches:
+                watch.web = self.settings.web       # the poll timer does the rest
 
     def _on_words_changed(self) -> None:
         self.worker.post("refresh")
@@ -356,8 +362,10 @@ class Application(QObject):
     def _sample_rect(self, hwnd: int) -> Optional[tuple[int, int, int, int]]:
         """Part of the message field that shows its background, None if unknown."""
         anchor = self._anchor if self._anchor_hwnd == hwnd else None
-        if anchor is not None and anchor.is_password:
+        if anchor is not None and (anchor.is_password or anchor.foreign):
             return None
+        if self.watch.is_browser(hwnd) and anchor is None:
+            return None                         # the guess is made for Telegram Desktop
         if anchor is None or anchor.source == "window":
             anchor = self._fallback.locate(hwnd)
             if anchor is None:
@@ -392,15 +400,18 @@ class Application(QObject):
     def _on_anchor(self, hwnd, anchor) -> None:
         self._anchor = anchor
         self._anchor_hwnd = hwnd
-        blocked = bool(anchor is not None and anchor.is_password)
-        if blocked != self._blocked:
-            self._blocked = blocked
-            self.worker.post("blocked", blocked)
+        password = bool(anchor is not None and anchor.is_password)
+        # In a browser only a field found on a Telegram Web page unblocks
+        foreign = self.watch.is_browser(hwnd) and (
+            anchor is None or anchor.foreign or anchor.source != "web")
+        self._blocked = password or foreign
+        # Posted every time: the worker blocks a browser on its own until told
+        self.worker.post("blocked", self._blocked, hwnd)
         if self.overlay.isVisible():
             self._reposition()
         if self.diag:
             source = anchor.source if anchor is not None else "нет (запасной вариант по окну)"
-            self._print_diag({"position": source, "password": blocked})
+            self._print_diag({"position": source, "password": password, "foreign": foreign})
 
     def _reposition(self) -> None:
         hwnd = self._target_hwnd
@@ -512,7 +523,9 @@ class Application(QObject):
         ]
         if state.get("paused"):
             parts.append("ПАУЗА")
-        if state.get("password") or state.get("blocked"):
+        if state.get("foreign"):
+            parts.append("НЕ TELEGRAM WEB (ничего не читаем)")
+        elif state.get("password") or state.get("blocked"):
             parts.append("ПОЛЕ ПАРОЛЯ (ничего не читаем)")
         self._print(" | ".join(parts))
 
