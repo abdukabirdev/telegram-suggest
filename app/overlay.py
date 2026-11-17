@@ -7,7 +7,8 @@ Look: a rounded panel with a soft shadow, words as chips. The first word,
 the one Tab inserts, sits on an accent-tinted chip. Key numbers are not shown
 all the time (they clutter the strip): they appear while Ctrl is held, the
 way Windows shows Alt shortcuts. A right click on a word asks whether to
-delete it from the dictionary; a second (left) click on it confirms.
+delete it from the dictionary (a next word: whether to stop offering it after
+the previous one); a second (left) click on it confirms.
 """
 
 from __future__ import annotations
@@ -42,7 +43,10 @@ def hint_for(index: int) -> str:
     return str(index + 1)
 
 
-def confirm_text(word: str) -> str:
+def confirm_text(word: str, next_word: bool = False) -> str:
+    """A right click deletes the word, or for a next word only the pair."""
+    if next_word:
+        return f"Не предлагать «{word}» тут?"
     return f"Удалить «{word}»?"
 
 
@@ -82,6 +86,7 @@ class Overlay(QWidget):
         self._hint_mode = key_hints if key_hints in HINT_MODES else "ctrl"
         self._ctrl_held = False
         self._items: list[str] = []
+        self._next_words = False
         self._shown: list[str] = []         # possibly elided
         self._rects: list[QRect] = []
         self._hover = -1
@@ -98,8 +103,10 @@ class Overlay(QWidget):
     def items(self) -> list[str]:
         return list(self._items)
 
-    def set_items(self, items: Sequence[str]) -> None:
+    def set_items(self, items: Sequence[str], next_words: bool = False) -> None:
+        """``next_words``: the words follow the previous one, nothing is typed."""
         self._items = list(items)
+        self._next_words = next_words
         self._hover = -1
         self._pressed = -1
         self._confirm = -1
@@ -139,7 +146,9 @@ class Overlay(QWidget):
 
     def _label(self, index: int) -> str:
         shown = self._shown[index]
-        return confirm_text(shown) if index == self._confirm else shown
+        if index != self._confirm:
+            return shown
+        return confirm_text(shown, self._next_words)
 
     def _layout(self) -> None:
         metrics = QFontMetrics(self._font)
