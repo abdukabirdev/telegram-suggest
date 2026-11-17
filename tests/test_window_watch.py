@@ -48,6 +48,15 @@ def test_target_matching_is_case_insensitive_and_cached(monkeypatch):
     assert lookups == [11, 22, 11]
 
 
+def test_telegram_forks_are_targets(monkeypatch):
+    names = {11: "telegram.exe", 22: "ayugram.exe", 33: "kotatogram.exe", 44: "64gram.exe",
+             55: "notepad.exe"}
+    monkeypatch.setattr(window_watch, "window_ids", lambda hwnd: (1, hwnd))
+    monkeypatch.setattr(window_watch, "process_name", lambda pid: names.get(pid, ""))
+    watch = WindowWatch()
+    assert [watch.is_target(pid) for pid in (11, 22, 33, 44, 55)] == [True] * 4 + [False]
+
+
 def test_reused_window_handle_is_rechecked(monkeypatch):
     pids = {0x100: 11}
     monkeypatch.setattr(window_watch, "window_ids", lambda hwnd: (1, pids.get(hwnd, 0)))
