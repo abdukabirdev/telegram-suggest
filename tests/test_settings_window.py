@@ -160,10 +160,11 @@ def test_switches_behave_like_check_boxes(window):
     assert switch.heightForWidth(200) >= switch.heightForWidth(2000)
 
 
-def test_telegram_web_switch(window, store):
+def test_browser_choice(window, store):
     window.show_page("suggest")
-    assert window._web.isChecked() and window.settings.web
-    window._web.click()
-    assert window.settings.web is False
-    assert store.get_setting("web") is False
-    assert window.changes[-1] == "web"
+    combo = window._browser
+    assert combo.currentData() == "all" and window.settings.browser == "all"
+    combo.setCurrentIndex(combo.findData("telegram"))
+    assert window.settings.browser == "telegram"
+    assert store.get_setting("browser") == "telegram"
+    assert window.changes[-1] == "browser"
