@@ -342,6 +342,17 @@ class SettingsWindow(QWidget):
         layout.addWidget(frame)
 
         frame, box = card()
+        box.addWidget(label("Где подсказывать", "section"))
+        box.addWidget(label("Telegram Desktop и его версии (AyuGram, Kotatogram, 64Gram) — "
+                            "всегда.", "hint"))
+        self._web = self._check(
+            "web", "Telegram Web в браузере (Chrome, Edge, Яндекс, Firefox, Opera)")
+        box.addWidget(self._web)
+        box.addWidget(label("Только на сайте web.telegram.org: на других сайтах и в адресной "
+                            "строке программа ничего не читает.", "hint"))
+        layout.addWidget(frame)
+
+        frame, box = card()
         box.addWidget(label("Положение окна", "section"))
         box.addWidget(label("Обычно окно стоит прямо над полем сообщения. Если оно мешает, "
                             "его можно сдвинуть.", "hint"))
