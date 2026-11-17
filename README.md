@@ -1,7 +1,8 @@
 # Telegram Suggest
 
 Phone-keyboard-style word suggestions for **Telegram Desktop** on Windows 10/11.
-It learns from what you type and offers the most likely words after one or two letters.
+It learns from what you type and offers the most likely words after one or two letters,
+and right after a space the word you usually type next («ассалому» → «алайкум»).
 
 - Uzbek (Cyrillic and Latin), Russian and English words
 - Matches Telegram's colours: day, night or any custom theme
@@ -24,7 +25,7 @@ Starting the same version again just opens its settings window.
 | Insert the highlighted word | `Tab` |
 | Insert word 1–4 | `Ctrl+1` … `Ctrl+4` (numbers appear while `Ctrl` is held) |
 | Insert any word | click it |
-| Remove a word from the dictionary | right-click it |
+| Remove a word from the dictionary | right-click it (a next word: stop offering it after this one) |
 | Hide suggestions for this word | `Esc` |
 | Pause / resume | `Ctrl+Alt+P` or the tray icon |
 
