@@ -329,7 +329,13 @@ class SettingsWindow(QWidget):
         box.addLayout(grid)
         box.addWidget(self._check(
             "next_word",
-            "Предлагать следующее слово сразу после пробела (по вашим частым сочетаниям)"))
+            "Предлагать следующее слово сразу после пробела: «ассалому» → «алайкум»"))
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(label("Если вы написали это сочетание хотя бы", wrap=False))
+        row.addWidget(self._spin("next_word_min_count", 1, 10, " раз(а)"))
+        row.addStretch(1)
+        box.addLayout(row)
         box.addWidget(self._check(
             "cross_script",
             "Узбекский: предлагать слово и в другой письменности (кириллица ↔ латиница)"))
