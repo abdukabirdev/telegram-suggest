@@ -288,12 +288,64 @@ def test_password_field_blocks_and_forgets(rig, lexicon):
     assert rig.shown == ["салом"]
 
 
-def test_blocked_field_rechecks_location_on_tab_and_enter(rig):
+def test_blocked_field_rechecks_location_on_every_key(rig):
     rig.worker.process(("blocked", True))
     rig.key(VK["а"])
-    assert rig.word_starts == []
     rig.key(w.VK_RETURN)
-    assert rig.word_starts == [HWND]
+    assert rig.word_starts == [HWND, HWND]
+    assert rig.engine.prefix == ""
+
+
+BROWSER = 0x777
+
+
+def test_browser_waits_for_telegram_web(rig, lexicon):
+    rig.worker._needs_confirmation = lambda hwnd: hwnd == BROWSER
+    rig.type("салом\n")
+    rig.worker.process(("focus", True, BROWSER))
+    assert rig.word_starts[-1] == BROWSER           # the page is checked at once
+    for ch in "салом":
+        rig.key(VK[ch], hwnd=BROWSER)
+    rig.key(w.VK_RETURN, hwnd=BROWSER)
+    assert lexicon.get("салом").freq == 1           # nothing used before the answer
+    rig.worker.process(("blocked", False, BROWSER))
+    rig.key(VK["с"], hwnd=BROWSER)
+    rig.key(VK["а"], hwnd=BROWSER)
+    assert rig.shown == ["салом"]
+
+
+def test_late_answer_about_another_window_is_ignored(rig):
+    rig.worker._needs_confirmation = lambda hwnd: hwnd == BROWSER
+    rig.worker.process(("focus", True, BROWSER))
+    rig.worker.process(("blocked", False, HWND))    # Telegram Desktop, left just now
+    rig.key(VK["с"], hwnd=BROWSER)
+    assert rig.engine.prefix == ""
+    rig.worker.process(("blocked", True, HWND))     # nor does it block
+    rig.worker.process(("blocked", False, BROWSER))
+    rig.key(w.VK_SPACE, hwnd=BROWSER)
+    rig.key(VK["с"], hwnd=BROWSER)
+    assert rig.engine.prefix == "с"
+
+
+def test_unblocked_in_the_middle_of_a_word_skips_it(rig, lexicon):
+    rig.type("салом\n")
+    rig.worker.process(("blocked", True))
+    rig.type("са")                                  # start of the word unseen...
+    rig.worker.process(("blocked", False))
+    rig.type("лом")                                 # ...so "лом" is not a word
+    assert rig.shown == [] and rig.engine.prefix == ""
+    rig.type(" са")
+    assert rig.shown == ["салом"]
+    assert "лом" not in lexicon
+
+
+def test_unblocked_after_a_space_starts_clean(rig):
+    rig.type("салом\n")
+    rig.worker.process(("blocked", True))
+    rig.type("ака ")
+    rig.worker.process(("blocked", False))
+    rig.type("са")
+    assert rig.shown == ["салом"]
 
 
 def test_focus_loss_hides_and_resets(rig):
