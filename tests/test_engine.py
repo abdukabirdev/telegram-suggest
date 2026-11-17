@@ -350,6 +350,17 @@ def test_discard_forgets_without_learning(engine, lexicon):
     assert lexicon.bigram_count() == 0
 
 
+def test_skip_word_ignores_the_rest_of_an_unseen_word(engine, lexicon):
+    type_keys(engine, "салом\n")
+    type_keys(engine, "пар")
+    engine.skip_word()                       # the start of this word was not seen
+    type_keys(engine, "ол")
+    assert engine.prefix == "" and engine.suggestions() == []
+    type_keys(engine, " са")
+    assert texts(engine.suggestions()) == ["салом"]
+    assert "ол" not in lexicon and "пар" not in lexicon and "парол" not in lexicon
+
+
 # ---- next word prediction --------------------------------------------------
 
 def test_next_word_after_a_habitual_pair(engine):
